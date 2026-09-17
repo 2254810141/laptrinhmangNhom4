@@ -6,7 +6,7 @@ Một ứng dụng chat trực tuyến đơn giản theo thời gian thực (Rea
 
 ## 🛠️ Công Nghệ Sử Dụng
 
-**Backend:** C# (.NET 8.0 / ASP.NET Core SignalR)
+**Backend:** C# (.NET 10.0 / ASP.NET Core SignalR)
 **Frontend:** HTML5, CSS3, JavaScript (SignalR Client SDK)
 **Giao thức truyền tải:** WebSocket (SignalR tự động quản lý kết nối ở tầng ứng dụng - L7)
 
