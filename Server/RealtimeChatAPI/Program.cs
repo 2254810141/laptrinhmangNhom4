@@ -24,7 +24,7 @@ builder.Services.AddCors(options =>
             .AllowAnyMethod()
             .AllowAnyHeader()
             .AllowCredentials()
-            .WithOrigins("http://localhost:5173", "http://localhost:3000", "http://127.0.0.1:5173");
+            .SetIsOriginAllowed(_ => true); // Allow all origins for LAN access
     });
 });
 
@@ -39,13 +39,7 @@ if (app.Environment.IsDevelopment())
 app.UseRouting();
 app.UseCors("CorsPolicy");
 
-app.UseEndpoints(endpoints =>
-{
-    endpoints.MapControllers();
-    endpoints.MapHub<ChatHub>("/chathub");
-});
-
-// Health check endpoint
-app.MapGet("/api/health", () => new { status = "OK", timestamp = DateTime.UtcNow });
+app.MapControllers();
+app.MapHub<ChatHub>("/chathub");
 
 app.Run();

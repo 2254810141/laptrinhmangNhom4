@@ -1,6 +1,6 @@
 ========================================================================
   REALTIME CHAT - COMPLETE SETUP GUIDE
-  ASP.NET Core 8.0 + SignalR + MongoDB
+  ASP.NET Core 10.0 + SignalR + MongoDB
 ========================================================================
 
 📁 PROJECT STRUCTURE
@@ -31,13 +31,13 @@ RealtimeChatAPI/
 ✅ STEP 1: INSTALL .NET 8.0 SDK
 ========================================================================
 
-1. Download from: https://dotnet.microsoft.com/download/dotnet/8.0
+1. Download from: https://dotnet.microsoft.com/download/dotnet/10.0
 2. Install and verify:
    
    Command Prompt:
    > dotnet --version
    
-   Expected output: 8.0.x or higher
+   Expected output: 10.0.x or higher
 
 ========================================================================
 ✅ STEP 2: CONFIGURE MONGODB CONNECTION

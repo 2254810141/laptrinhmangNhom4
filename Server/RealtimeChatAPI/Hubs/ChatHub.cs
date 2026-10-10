@@ -7,7 +7,8 @@ namespace RealtimeChatAPI.Hubs
     public class ChatHub : Hub
     {
         private readonly IChatService _chatService;
-        private static Dictionary<string, HashSet<string>> _onlineUsers = new();
+        private static readonly object _lock = new();
+        private static readonly Dictionary<string, Dictionary<string, string>> _onlineUsers = new();
 
         public ChatHub(IChatService chatService)
         {
@@ -20,16 +21,29 @@ namespace RealtimeChatAPI.Hubs
             Console.WriteLine($"Client connected: {Context.ConnectionId}");
         }
 
-        public override async Task OnDisconnectedAsync(Exception exception)
+        public override async Task OnDisconnectedAsync(Exception? exception)
         {
-            // Remove user from online list
-            foreach (var room in _onlineUsers.Keys.ToList())
+            List<string> roomsToBroadcast = new();
+
+            lock (_lock)
             {
-                if (_onlineUsers[room].Contains(Context.ConnectionId))
+                foreach (var room in _onlineUsers.Keys.ToList())
                 {
-                    _onlineUsers[room].Remove(Context.ConnectionId);
-                    await Clients.Group(room).SendAsync("UpdateOnlineUsers", _onlineUsers[room].ToList());
+                    if (_onlineUsers[room].Remove(Context.ConnectionId))
+                    {
+                        roomsToBroadcast.Add(room);
+                    }
+
+                    if (_onlineUsers[room].Count == 0)
+                    {
+                        _onlineUsers.Remove(room);
+                    }
                 }
+            }
+
+            foreach (var room in roomsToBroadcast)
+            {
+                await Clients.Group(room).SendAsync("UpdateOnlineUsers", GetOnlineUsers(room));
             }
 
             await base.OnDisconnectedAsync(exception);
@@ -38,25 +52,49 @@ namespace RealtimeChatAPI.Hubs
 
         public async Task JoinRoom(string roomId, string nickname)
         {
-            // Add user to the room group
             await Groups.AddToGroupAsync(Context.ConnectionId, roomId);
 
-            // Track online users
-            if (!_onlineUsers.ContainsKey(roomId))
+            lock (_lock)
             {
-                _onlineUsers[roomId] = new HashSet<string>();
-            }
-            _onlineUsers[roomId].Add(Context.ConnectionId);
+                if (!_onlineUsers.ContainsKey(roomId))
+                {
+                    _onlineUsers[roomId] = new Dictionary<string, string>();
+                }
 
-            // Load message history
+                _onlineUsers[roomId][Context.ConnectionId] = nickname;
+            }
+
+            var room = await _chatService.GetOrCreateRoomAsync(roomId);
             var history = await _chatService.GetMessageHistoryAsync(roomId);
+            await Clients.Caller.SendAsync("RoomInfoLoaded", new
+            {
+                roomId = room.RoomId,
+                displayName = room.DisplayName,
+                updatedAt = room.UpdatedAt
+            });
             await Clients.Caller.SendAsync("LoadHistory", history);
 
-            // Notify others about new user
-            await Clients.Group(roomId).SendAsync("UpdateOnlineUsers", _onlineUsers[roomId].ToList());
+            await Clients.Group(roomId).SendAsync("UpdateOnlineUsers", GetOnlineUsers(roomId));
             await Clients.Group(roomId).SendAsync("NotifyUserJoined", nickname);
 
             Console.WriteLine($"User {nickname} joined room {roomId}");
+        }
+
+        public async Task UpdateRoomName(string roomId, string displayName)
+        {
+            if (string.IsNullOrWhiteSpace(displayName))
+            {
+                return;
+            }
+
+            var room = await _chatService.UpdateRoomNameAsync(roomId, displayName);
+
+            await Clients.Group(roomId).SendAsync("RoomNameUpdated", new
+            {
+                roomId = room.RoomId,
+                displayName = room.DisplayName,
+                updatedAt = room.UpdatedAt
+            });
         }
 
         public async Task SendMessage(string roomId, string nickname, string content)
@@ -90,11 +128,42 @@ namespace RealtimeChatAPI.Hubs
         {
             await Groups.RemoveFromGroupAsync(Context.ConnectionId, roomId);
 
-            if (_onlineUsers.ContainsKey(roomId))
+            bool removed = false;
+
+            lock (_lock)
             {
-                _onlineUsers[roomId].Remove(Context.ConnectionId);
-                await Clients.Group(roomId).SendAsync("UpdateOnlineUsers", _onlineUsers[roomId].ToList());
+                if (_onlineUsers.ContainsKey(roomId))
+                {
+                    removed = _onlineUsers[roomId].Remove(Context.ConnectionId);
+
+                    if (_onlineUsers[roomId].Count == 0)
+                    {
+                        _onlineUsers.Remove(roomId);
+                    }
+                }
+            }
+
+            if (removed)
+            {
+                await Clients.Group(roomId).SendAsync("UpdateOnlineUsers", GetOnlineUsers(roomId));
                 await Clients.Group(roomId).SendAsync("NotifyUserLeft", nickname);
+            }
+        }
+
+        private static List<object> GetOnlineUsers(string roomId)
+        {
+            lock (_lock)
+            {
+                if (!_onlineUsers.TryGetValue(roomId, out var users))
+                {
+                    return new List<object>();
+                }
+
+                return users.Select(user => new
+                {
+                    connectionId = user.Key,
+                    nickname = user.Value
+                }).Cast<object>().ToList();
             }
         }
     }
