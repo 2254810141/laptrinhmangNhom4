@@ -67,6 +67,9 @@ function ChatApp() {
   const [theme, setTheme] = useState(() =>
     window.localStorage.getItem('chat.theme') === 'light' ? 'light' : 'dark',
   )
+function ChatApp() {
+  const savedNickname = window.localStorage.getItem('chat.nickname') || ''
+  const defaultAvatarSrc = '/default-avatar.svg'
   const [connection, setConnection] = useState(null)
   const [nickname, setNickname] = useState(savedNickname)
   const [currentNickname, setCurrentNickname] = useState(savedNickname)
@@ -77,6 +80,9 @@ function ChatApp() {
   const [memberFilter, setMemberFilter] = useState('all')
   const [roomInfo, setRoomInfo] = useState({ roomId: 'default-room', displayName: 'Hội ae rok' })
   const [roomNameDraft, setRoomNameDraft] = useState('Hội ae rok')
+  const [onlineCount, setOnlineCount] = useState(0)
+  const [roomInfo, setRoomInfo] = useState({ roomId: 'default-room', displayName: 'Phòng chat' })
+  const [roomNameDraft, setRoomNameDraft] = useState('')
   const [isEditingRoomName, setIsEditingRoomName] = useState(false)
   const [isSavingRoomName, setIsSavingRoomName] = useState(false)
   const [isConnected, setIsConnected] = useState(false)
@@ -162,6 +168,7 @@ function ChatApp() {
               nickname: data.nickname,
               content: parsedMessage.text,
               style: parsedMessage.style,
+              content: data.content,
               timestamp: data.timestamp,
               type: 'message',
               isMine: data.nickname === currentNickname,
@@ -214,6 +221,11 @@ function ChatApp() {
         newConnection.on('MemberLastSeenUpdated', ({ nickname, lastSeen }) => {
           setKnownMembers((prev) =>
             prev.map((member) => member.nickname === nickname ? { ...member, lastSeen } : member),
+            history.map((msg) => ({
+              ...msg,
+              type: 'message',
+              isMine: msg.nickname === currentNickname,
+            })),
           )
         })
 
@@ -226,6 +238,10 @@ function ChatApp() {
 
         newConnection.on('NotifyUserJoined', (joinedNickname) => {
           setKnownMembers((prev) => rememberMember(prev, joinedNickname))
+          setOnlineCount(users.length)
+        })
+
+        newConnection.on('NotifyUserJoined', (joinedNickname) => {
           setMessages((prev) => [
             ...prev,
             {
@@ -285,6 +301,10 @@ function ChatApp() {
     const interval = window.setInterval(() => setCurrentTime(Date.now()), 60000)
     return () => window.clearInterval(interval)
   }, [])
+    if (!isEditingRoomName) {
+      setRoomNameDraft(roomInfo.displayName)
+    }
+  }, [roomInfo.displayName, isEditingRoomName])
 
   const handleStartChat = () => {
     if (!nickname.trim()) {
@@ -310,6 +330,8 @@ function ChatApp() {
     const content = hasFormatting
       ? `${FORMATTED_MESSAGE_PREFIX}${JSON.stringify({ text, ...textFormat })}`
       : text
+    const content = messageInput.trim()
+    if (!content || !connection) return
 
     try {
       await connection.invoke('SendMessage', roomId, currentNickname, content)
@@ -463,6 +485,23 @@ function ChatApp() {
         <div className="login-topbar">
           <ThemeToggle theme={theme} onToggle={toggleTheme} />
         </div>
+  const escapeHtml = (text) => {
+    const map = {
+      '&': '&amp;',
+      '<': '&lt;',
+      '>': '&gt;',
+      '"': '&quot;',
+      "'": '&#039;',
+    }
+
+    return text.replace(/[&<>"']/g, (match) => map[match])
+  }
+
+  const formatTime = (timestamp) => new Date(timestamp).toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit' })
+
+  if (!showChat) {
+    return (
+      <div className="nickname-container">
         <div className="nickname-modal">
           <div className="brand-mark">💬</div>
           <h1>Realtime Chat</h1>
@@ -559,6 +598,39 @@ function ChatApp() {
                     </div>
                   )
                 })
+    <div className="chat-container active">
+      <div className="chat-shell">
+        <aside className="chat-sidebar">
+          <div className="sidebar-profile">
+            <img className="profile-avatar" src={defaultAvatarSrc} alt="Avatar mặc định" />
+            <div>
+              <div className="profile-label">Tài khoản của bạn</div>
+              <div className="profile-name">{currentNickname}</div>
+            </div>
+          </div>
+
+          <div className="sidebar-block">
+            <div className="sidebar-block-title">
+              <span>👥</span>
+              <span>Đang online</span>
+              <span className="sidebar-pill">{onlineCount}</span>
+            </div>
+            <div className="online-users-list">
+                {onlineUsers.length === 0 ? (
+                  <div className="empty-state">Chưa có ai online</div>
+                ) : (
+                  onlineUsers.map((user) => (
+                    <div key={user.connectionId} className={`online-user ${user.nickname === currentNickname ? 'self' : ''}`}>
+                      <img className="member-avatar" src={defaultAvatarSrc} alt="Avatar mặc định" />
+                      <div className="member-meta">
+                        <div className="member-name">
+                          {user.nickname}
+                        {user.nickname === currentNickname && <span className="member-badge">Bạn</span>}
+                      </div>
+                      <div className="member-status">Đang hoạt động</div>
+                    </div>
+                  </div>
+                ))
               )}
             </div>
           </div>
@@ -567,6 +639,7 @@ function ChatApp() {
             <span className="connection-dot" />
             <span>{isConnected ? 'Đã kết nối' : 'Mất kết nối'}</span>
             <span className="connection-label">SignalR</span>
+            {isConnected ? '🟢 Kết nối' : '🔴 Mất kết nối'}
           </div>
         </aside>
 
@@ -575,6 +648,7 @@ function ChatApp() {
             <div className="chat-header-left">
               <button className="mobile-members-button" type="button" onClick={() => setShowMobileSidebar(true)} aria-label="Mở danh sách thành viên">☰</button>
               <div className="chat-room-icon">✦</div>
+              <div className="chat-room-icon">💬</div>
               <div className="room-title-wrap">
                 <div className="room-title-row">
                   {isEditingRoomName ? (
@@ -619,7 +693,6 @@ function ChatApp() {
                 <p className="room-subtitle"><span className="room-online-dot" />{onlineMemberCount}/{knownMembers.length} online <span className="subtitle-divider">·</span> Phòng chat</p>
               </div>
             </div>
-
             <div className="chat-header-right">
               <span className="room-chip"><span className="room-online-dot" />{onlineMemberCount} online</span>
               <button className="icon-button room-menu-button" type="button" aria-label="Cài đặt phòng chat" aria-expanded={showRoomMenu} onClick={() => setShowRoomMenu((value) => !value)}>•••</button>
@@ -656,6 +729,24 @@ function ChatApp() {
                       <div className="message-nickname">{msg.nickname}</div>
                     </div>
                     <div className="message-content" style={msg.style || undefined}>{msg.content}</div>
+              <span className="room-chip">{onlineCount} online</span>
+            </div>
+          </header>
+
+              <div className="messages-area">
+            {messages.map((msg, index) =>
+              msg.type === 'system' ? (
+                <div key={index} className="system-message">
+                  {msg.content}
+                </div>
+              ) : (
+                <div key={index} className={`message ${msg.isMine ? 'mine' : ''}`}>
+                  <img className="message-avatar" src={defaultAvatarSrc} alt="Avatar mặc định" />
+                  <div className="message-bubble">
+                    <div className="message-meta">
+                      <div className="message-nickname">{escapeHtml(msg.nickname)}</div>
+                    </div>
+                    <div className="message-content">{escapeHtml(msg.content)}</div>
                     <div className="message-timestamp">{formatTime(msg.timestamp)}</div>
                   </div>
                 </div>
@@ -712,6 +803,19 @@ function ChatApp() {
                 <span>Gửi</span><span className="send-arrow">↗</span>
               </button>
             </div>
+          <div className="input-area">
+            <div className="composer-icon">✎</div>
+            <input
+              type="text"
+              className="message-input"
+              placeholder="Nhập tin nhắn..."
+              value={messageInput}
+              onChange={(event) => setMessageInput(event.target.value)}
+              onKeyDown={handleKeyPress}
+            />
+            <button className="send-button" onClick={handleSendMessage} disabled={!messageInput.trim() || !isConnected}>
+              Gửi
+            </button>
           </div>
         </main>
       </div>

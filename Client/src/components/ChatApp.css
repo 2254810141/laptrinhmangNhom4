@@ -1290,6 +1290,7 @@ button {
   font-size: 22px;
 }
 
+
 .message {
   gap: 9px;
 }
@@ -1415,6 +1416,7 @@ button {
   margin: 0 3px;
   background: rgba(148, 163, 184, 0.15);
 }
+
 
 .font-size-slider {
   width: 76px;

@@ -25,6 +25,7 @@ namespace RealtimeChatAPI.Hubs
         public override async Task OnDisconnectedAsync(Exception? exception)
         {
             List<(string RoomId, string Nickname)> usersToUpdate = new();
+            List<string> roomsToBroadcast = new();
 
             lock (_lock)
             {
@@ -33,6 +34,9 @@ namespace RealtimeChatAPI.Hubs
                     if (_onlineUsers[room].Remove(Context.ConnectionId, out var nickname))
                     {
                         usersToUpdate.Add((room, nickname));
+                    if (_onlineUsers[room].Remove(Context.ConnectionId))
+                    {
+                        roomsToBroadcast.Add(room);
                     }
 
                     if (_onlineUsers[room].Count == 0)
@@ -51,6 +55,9 @@ namespace RealtimeChatAPI.Hubs
                     nickname,
                     lastSeen = DateTime.UtcNow
                 });
+            foreach (var room in roomsToBroadcast)
+            {
+                await Clients.Group(room).SendAsync("UpdateOnlineUsers", GetOnlineUsers(room));
             }
 
             await base.OnDisconnectedAsync(exception);
@@ -75,6 +82,7 @@ namespace RealtimeChatAPI.Hubs
             await _chatService.UpsertRoomMemberAsync(roomId, nickname);
             var history = await _chatService.GetMessageHistoryAsync(roomId);
             var members = await _chatService.GetRoomMembersAsync(roomId);
+            var history = await _chatService.GetMessageHistoryAsync(roomId);
             await Clients.Caller.SendAsync("RoomInfoLoaded", new
             {
                 roomId = room.RoomId,
@@ -203,6 +211,7 @@ namespace RealtimeChatAPI.Hubs
                     nickname,
                     lastSeen = DateTime.UtcNow
                 });
+                await Clients.Group(roomId).SendAsync("UpdateOnlineUsers", GetOnlineUsers(roomId));
                 await Clients.Group(roomId).SendAsync("NotifyUserLeft", nickname);
             }
         }
