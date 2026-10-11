@@ -1,6 +1,8 @@
 # Hướng dẫn chạy Chat App qua mạng LAN
 
-## Bước 1: Tìm IP LAN của máy server
+## Phương án 1: Chạy qua mạng LAN (cùng mạng WiFi/LAN)
+
+### Bước 1: Tìm IP LAN của máy server
 
 Mở Command Prompt và chạy:
 ```
@@ -102,3 +104,98 @@ ping 192.168.1.100
 **Lỗi: Client không load được**
 - Đảm bảo client đang chạy với `npm run dev`
 - Dùng URL Network (có IP LAN) thay vì Local
+
+---
+
+## Phương án 2: Chạy qua mạng Internet với Ngrok (khác mạng)
+
+Dùng ngrok để expose server ra internet, cho phép người từ bất kỳ mạng nào chat được.
+
+### Bước 1: Tải và cài đặt Ngrok
+
+1. Truy cập: https://ngrok.com/download
+2. Tải phiên bản Windows
+3. Giải nén vào thư mục (ví dụ: `C:\ngrok`)
+4. Đăng ký tài khoản miễn phí tại https://ngrok.com/signup
+5. Copy authtoken từ dashboard
+6. Mở terminal và chạy:
+   ```
+   ngrok config add-authtoken YOUR_AUTH_TOKEN
+   ```
+
+### Bước 2: Chạy Server
+
+Mở terminal tại thư mục Server:
+```bash
+cd D:\.NET\LaptrinhmangNhom4\Server\RealtimeChatAPI
+dotnet run
+```
+
+### Bước 3: Chạy Ngrok
+
+Mở terminal mới và chạy:
+```bash
+ngrok http 5000
+```
+
+Ngrok sẽ hiển thị:
+```
+Forwarding  https://abc123.ngrok.io -> http://localhost:5000
+```
+
+Copy URL https (ví dụ: `https://abc123.ngrok.io`)
+
+### Bước 4: Cấu hình Client
+
+Tạo file `.env` trong thư mục `D:\.NET\LaptrinhmangNhom4\Client` với nội dung:
+```
+VITE_SIGNALR_URL=https://abc123.ngrok.io/chathub
+```
+(thay `abc123.ngrok.io` bằng URL ngrok của bạn)
+
+### Bước 5: Chạy Client
+
+Mở terminal mới tại thư mục Client:
+```bash
+cd D:\.NET\LaptrinhmangNhom4\Client
+npm run dev
+```
+
+### Bước 6: Deploy Client lên Netlify (miễn phí)
+
+1. **Build client** (đã build xong):
+   ```bash
+   cd D:\.NET\LaptrinhmangNhom4\Client
+   npm run build
+   ```
+
+2. **Deploy lên Netlify:**
+   - Truy cập: https://app.netlify.com/drop
+   - Kéo thả folder `D:\.NET\LaptrinhmangNhom4\Client\dist` vào
+   - Netlify sẽ deploy và cung cấp URL (ví dụ: `https://your-chat-app.netlify.app`)
+
+3. **Chia sẻ URL Netlify** cho người khác
+
+**Lưu ý:** File `.env` đã được build vào production, nên URL SignalR đã được cấu hình đúng.
+
+### Bước 7: Người khác truy cập
+
+Người từ bất kỳ mạng nào:
+1. Truy cập URL client đã deploy hoặc ngrok client
+2. Nhập nickname
+3. Chat realtime với nhau
+
+### Lưu ý quan trọng
+
+- **Ngrok miễn phí:** URL thay đổi mỗi lần restart
+- **Ngrok paid:** URL cố định, ổn định hơn
+- **MongoDB:** Đã dùng MongoDB Atlas cloud, nên database hoạt động từ bất kỳ đâu
+- **CORS:** Đã cấu hình cho phép tất cả origin
+
+### Xác nhận hoạt động
+
+- ✅ Server chạy trên localhost:5000
+- ✅ Ngrok expose server ra internet
+- ✅ Client kết nối đến URL ngrok
+- ✅ Người từ mạng khác truy cập được
+- ✅ Tin nhắn realtime giữa các mạng khác nhau
