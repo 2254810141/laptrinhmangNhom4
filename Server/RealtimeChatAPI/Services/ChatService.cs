@@ -76,13 +76,11 @@ namespace RealtimeChatAPI.Services
                 return room.DisplayName == "Phòng chat"
                     ? await UpdateRoomNameAsync(roomId, "Hội ae rok")
                     : room;
-                return room;
             }
 
             room = new ChatRoom
             {
                 RoomId = roomId,
-                DisplayName = "Hội ae rok",
                 DisplayName = "Phòng chat",
                 UpdatedAt = DateTime.UtcNow
             };
