@@ -49,6 +49,7 @@ namespace RealtimeChatAPI.Services
             }
         }
 
+
         public async Task<List<ChatMessage>> GetMessageHistoryAsync(string roomId, int limit = 50)
         {
             var messages = await _messagesCollection

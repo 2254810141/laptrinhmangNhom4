@@ -10,6 +10,7 @@ namespace RealtimeChatAPI.Hubs
         private static readonly object _lock = new();
         private static readonly Dictionary<string, Dictionary<string, string>> _onlineUsers = new();
 
+
         public ChatHub(IChatService chatService)
         {
             _chatService = chatService;

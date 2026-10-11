@@ -21,3 +21,4 @@ namespace RealtimeChatAPI.Models
         public string Avatar { get; set; } = string.Empty;
     }
 }
+

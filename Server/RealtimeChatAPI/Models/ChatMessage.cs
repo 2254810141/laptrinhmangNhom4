@@ -21,3 +21,4 @@ namespace RealtimeChatAPI.Models
         public string RoomId { get; set; } = string.Empty;
     }
 }
+

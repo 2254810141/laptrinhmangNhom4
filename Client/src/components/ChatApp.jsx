@@ -120,6 +120,7 @@ function ChatApp() {
     let activeConnection = null
     let cancelled = false
 
+    
     const initializeConnection = async () => {
       try {
         const newConnection = new signalR.HubConnectionBuilder()
