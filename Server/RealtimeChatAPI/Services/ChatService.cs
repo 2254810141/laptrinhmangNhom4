@@ -9,18 +9,24 @@ namespace RealtimeChatAPI.Services
         Task SaveMessageAsync(ChatMessage message);
         Task<ChatRoom> GetOrCreateRoomAsync(string roomId);
         Task<ChatRoom> UpdateRoomNameAsync(string roomId, string displayName);
+        Task<List<ChatMember>> GetRoomMembersAsync(string roomId);
+        Task UpsertRoomMemberAsync(string roomId, string nickname);
+        Task UpdateMemberLastSeenAsync(string roomId, string nickname);
+        Task UpdateMemberAvatarAsync(string roomId, string nickname, string avatar);
     }
 
     public class ChatService : IChatService
     {
         private readonly IMongoCollection<ChatMessage> _messagesCollection;
         private readonly IMongoCollection<ChatRoom> _roomsCollection;
+        private readonly IMongoCollection<ChatMember> _membersCollection;
 
         public ChatService(IMongoClient mongoClient, string databaseName = "Websocket")
         {
             var database = mongoClient.GetDatabase(databaseName);
             _messagesCollection = database.GetCollection<ChatMessage>("message");
             _roomsCollection = database.GetCollection<ChatRoom>("rooms");
+            _membersCollection = database.GetCollection<ChatMember>("members");
 
             // Create index for faster queries
             try
@@ -31,12 +37,18 @@ namespace RealtimeChatAPI.Services
                 var roomIndexKeys = Builders<ChatRoom>.IndexKeys.Ascending(r => r.RoomId);
                 var roomIndexOptions = new CreateIndexOptions { Unique = true };
                 _roomsCollection.Indexes.CreateOne(new CreateIndexModel<ChatRoom>(roomIndexKeys, roomIndexOptions));
+
+                var memberIndexKeys = Builders<ChatMember>.IndexKeys
+                    .Ascending(member => member.RoomId)
+                    .Ascending(member => member.Nickname);
+                _membersCollection.Indexes.CreateOne(new CreateIndexModel<ChatMember>(memberIndexKeys));
             }
             catch (MongoCommandException ex) when (ex.Code == 48)
             {
                 // Index already exists
             }
         }
+
 
         public async Task<List<ChatMessage>> GetMessageHistoryAsync(string roomId, int limit = 50)
         {
@@ -61,12 +73,16 @@ namespace RealtimeChatAPI.Services
             var room = await _roomsCollection.Find(r => r.RoomId == roomId).FirstOrDefaultAsync();
             if (room != null)
             {
+                return room.DisplayName == "Phòng chat"
+                    ? await UpdateRoomNameAsync(roomId, "Hội ae rok")
+                    : room;
                 return room;
             }
 
             room = new ChatRoom
             {
                 RoomId = roomId,
+                DisplayName = "Hội ae rok",
                 DisplayName = "Phòng chat",
                 UpdatedAt = DateTime.UtcNow
             };
@@ -94,6 +110,47 @@ namespace RealtimeChatAPI.Services
                 options);
 
             return await _roomsCollection.Find(r => r.RoomId == roomId).FirstOrDefaultAsync();
+        }
+
+        public async Task<List<ChatMember>> GetRoomMembersAsync(string roomId)
+        {
+            return await _membersCollection
+                .Find(member => member.RoomId == roomId)
+                .SortBy(member => member.Nickname)
+                .ToListAsync();
+        }
+
+        public async Task UpsertRoomMemberAsync(string roomId, string nickname)
+        {
+            var filter = Builders<ChatMember>.Filter
+                .Eq(member => member.RoomId, roomId)
+                & Builders<ChatMember>.Filter.Eq(member => member.Nickname, nickname);
+            var update = Builders<ChatMember>.Update
+                .Set(member => member.LastSeen, DateTime.UtcNow)
+                .SetOnInsert(member => member.RoomId, roomId)
+                .SetOnInsert(member => member.Nickname, nickname);
+
+            await _membersCollection.UpdateOneAsync(filter, update, new UpdateOptions { IsUpsert = true });
+        }
+
+        public async Task UpdateMemberLastSeenAsync(string roomId, string nickname)
+        {
+            var filter = Builders<ChatMember>.Filter
+                .Eq(member => member.RoomId, roomId)
+                & Builders<ChatMember>.Filter.Eq(member => member.Nickname, nickname);
+            var update = Builders<ChatMember>.Update.Set(member => member.LastSeen, DateTime.UtcNow);
+
+            await _membersCollection.UpdateOneAsync(filter, update);
+        }
+
+        public async Task UpdateMemberAvatarAsync(string roomId, string nickname, string avatar)
+        {
+            var filter = Builders<ChatMember>.Filter
+                .Eq(member => member.RoomId, roomId)
+                & Builders<ChatMember>.Filter.Eq(member => member.Nickname, nickname);
+            var update = Builders<ChatMember>.Update.Set(member => member.Avatar, avatar);
+
+            await _membersCollection.UpdateOneAsync(filter, update);
         }
     }
 }

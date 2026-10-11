@@ -17,4 +17,5 @@ namespace RealtimeChatAPI.Models
         [BsonElement("updatedAt")]
         public DateTime UpdatedAt { get; set; }
     }
+
 }
