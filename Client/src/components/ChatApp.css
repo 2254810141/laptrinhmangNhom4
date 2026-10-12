@@ -1630,9 +1630,14 @@ button {
     display: flex;
     width: min(320px, 86vw);
     height: 100vh;
+    overflow-y: auto;
     border-radius: 0 18px 18px 0;
     transform: translateX(-105%);
     transition: transform 0.22s ease;
+  }
+
+  .sidebar-profile {
+    display: flex;
   }
 
   .chat-sidebar.mobile-open {
@@ -1741,12 +1746,39 @@ button {
 }
 
 @media (max-width: 400px) {
+  .chat-header {
+    gap: 4px;
+  }
+
+  .chat-header-left {
+    min-width: 0;
+    flex: 1;
+  }
+
+  .chat-header-left > .chat-room-icon:first-of-type {
+    display: none;
+  }
+
+  .chat-header h2 {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .room-title-row {
+    min-width: 0;
+  }
+
+  .chat-header-right {
+    flex: 0 0 auto;
+  }
+
   .room-subtitle {
     font-size: 9px;
   }
 
   .room-chip {
-    gap: 5px;
+    display: none;
   }
 
   .room-menu-button {
@@ -1755,7 +1787,7 @@ button {
   }
 
   .format-toggle {
-    display: none;
+    display: grid;
   }
 }
 
