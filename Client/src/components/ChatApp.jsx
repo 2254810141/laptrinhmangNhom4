@@ -1,11 +1,13 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+﻿import { useEffect, useMemo, useRef, useState } from 'react'
 import * as signalR from '@microsoft/signalr'
 import './ChatApp.css'
 
 const FORMATTED_MESSAGE_PREFIX = '[[chat-format-v1]]'
 
 function readFormattedMessage(content) {
-  if (!content.startsWith(FORMATTED_MESSAGE_PREFIX)) return { text: content, style: null }
+  if (!content || !content.startsWith(FORMATTED_MESSAGE_PREFIX)) {
+    return { text: content || '', style: null }
+  }
 
   try {
     const formatted = JSON.parse(content.slice(FORMATTED_MESSAGE_PREFIX.length))
@@ -61,18 +63,22 @@ function ThemeToggle({ theme, onToggle, className = '' }) {
 }
 
 function ChatApp() {
-  const savedNickname = window.localStorage.getItem('chat.nickname') || ''
+  const savedNickname = typeof window !== 'undefined' ? window.localStorage.getItem('chat.nickname') || '' : ''
   const defaultAvatarSrc = '/default-avatar.svg'
-  const [avatarSrc, setAvatarSrc] = useState(() => window.localStorage.getItem('chat.avatar') || defaultAvatarSrc)
-  const [theme, setTheme] = useState(() =>
-    window.localStorage.getItem('chat.theme') === 'light' ? 'light' : 'dark',
-  )
-function ChatApp() {
-  const savedNickname = window.localStorage.getItem('chat.nickname') || ''
-  const defaultAvatarSrc = '/default-avatar.svg'
-  const [connection, setConnection] = useState(null)
+
+  const [avatarSrc, setAvatarSrc] = useState(() => {
+    if (typeof window === 'undefined') return defaultAvatarSrc
+    return window.localStorage.getItem('chat.avatar') || defaultAvatarSrc
+  })
+
+  const [theme, setTheme] = useState(() => {
+    if (typeof window === 'undefined') return 'dark'
+    return window.localStorage.getItem('chat.theme') === 'light' ? 'light' : 'dark'
+  })
+
   const [nickname, setNickname] = useState(savedNickname)
   const [currentNickname, setCurrentNickname] = useState(savedNickname)
+  const [connection, setConnection] = useState(null)
   const [messages, setMessages] = useState([])
   const [messageInput, setMessageInput] = useState('')
   const [onlineUsers, setOnlineUsers] = useState([])
@@ -81,8 +87,6 @@ function ChatApp() {
   const [roomInfo, setRoomInfo] = useState({ roomId: 'default-room', displayName: 'Hội ae rok' })
   const [roomNameDraft, setRoomNameDraft] = useState('Hội ae rok')
   const [onlineCount, setOnlineCount] = useState(0)
-  const [roomInfo, setRoomInfo] = useState({ roomId: 'default-room', displayName: 'Phòng chat' })
-  const [roomNameDraft, setRoomNameDraft] = useState('')
   const [isEditingRoomName, setIsEditingRoomName] = useState(false)
   const [isSavingRoomName, setIsSavingRoomName] = useState(false)
   const [isConnected, setIsConnected] = useState(false)
@@ -100,14 +104,17 @@ function ChatApp() {
     underline: false,
   })
   const [currentTime, setCurrentTime] = useState(() => Date.now())
+
   const avatarInputRef = useRef(null)
   const messagesEndRef = useRef(null)
+
   const roomId = roomInfo.roomId
   const signalRUrl = import.meta.env.VITE_SIGNALR_URL || `http://${window.location.hostname}:5000/chathub`
 
   const roomLabel = useMemo(() => roomInfo.displayName || 'Phòng chat', [roomInfo.displayName])
   const onlineMemberNames = useMemo(() => new Set(onlineUsers.map((user) => user.nickname)), [onlineUsers])
   const onlineMemberCount = onlineMemberNames.size
+
   const visibleMembers = useMemo(
     () =>
       knownMembers
@@ -125,9 +132,20 @@ function ChatApp() {
 
     let activeConnection = null
     let cancelled = false
+    let retryTimeout = null
 
-    
+    const scheduleReconnect = () => {
+      if (cancelled || retryTimeout !== null) return
+
+      retryTimeout = window.setTimeout(() => {
+        retryTimeout = null
+        initializeConnection()
+      }, 5000)
+    }
+
     const initializeConnection = async () => {
+      if (cancelled) return
+
       try {
         const newConnection = new signalR.HubConnectionBuilder()
           .withUrl(signalRUrl, {
@@ -139,13 +157,21 @@ function ChatApp() {
 
         activeConnection = newConnection
 
-        newConnection.onreconnecting(() => {
-          setIsConnected(false)
+        newConnection.onreconnecting(() => setIsConnected(false))
+        newConnection.onreconnected(async () => {
+          try {
+            await newConnection.invoke('JoinRoom', roomId, currentNickname)
+            setIsConnected(true)
+          } catch (error) {
+            console.error('Failed to rejoin chat room:', error)
+            setIsConnected(false)
+          }
         })
-
-        newConnection.onreconnected(() => {
-          setIsConnected(true)
-          newConnection.invoke('JoinRoom', roomId, currentNickname).catch(console.error)
+        newConnection.onclose((error) => {
+          setIsConnected(false)
+          setConnection((current) => current === newConnection ? null : current)
+          if (error) console.error('SignalR connection closed:', error)
+          scheduleReconnect()
         })
 
         newConnection.on('RoomInfoLoaded', (room) => {
@@ -168,7 +194,6 @@ function ChatApp() {
               nickname: data.nickname,
               content: parsedMessage.text,
               style: parsedMessage.style,
-              content: data.content,
               timestamp: data.timestamp,
               type: 'message',
               isMine: data.nickname === currentNickname,
@@ -208,10 +233,11 @@ function ChatApp() {
           setKnownMembers((prev) => {
             const member = prev.find((item) => item.nickname === nickname)
             const updated = member
-              ? prev.map((item) => item.nickname === nickname ? { ...item, avatar } : item)
+              ? prev.map((item) => (item.nickname === nickname ? { ...item, avatar } : item))
               : [...prev, { nickname, avatar, lastSeen: new Date().toISOString() }]
             return updated
           })
+
           if (nickname === currentNickname) {
             setAvatarSrc(avatar || defaultAvatarSrc)
             if (avatar) window.localStorage.setItem('chat.avatar', avatar)
@@ -219,29 +245,17 @@ function ChatApp() {
         })
 
         newConnection.on('MemberLastSeenUpdated', ({ nickname, lastSeen }) => {
-          setKnownMembers((prev) =>
-            prev.map((member) => member.nickname === nickname ? { ...member, lastSeen } : member),
-            history.map((msg) => ({
-              ...msg,
-              type: 'message',
-              isMine: msg.nickname === currentNickname,
-            })),
-          )
+          setKnownMembers((prev) => prev.map((member) => (member.nickname === nickname ? { ...member, lastSeen } : member)))
         })
 
         newConnection.on('UpdateOnlineUsers', (users) => {
           setOnlineUsers(users)
-          setKnownMembers((prev) =>
-            users.reduce((members, user) => rememberMember(members, user.nickname), prev),
-          )
+          setOnlineCount(users.length)
+          setKnownMembers((prev) => users.reduce((members, user) => rememberMember(members, user.nickname), prev))
         })
 
         newConnection.on('NotifyUserJoined', (joinedNickname) => {
           setKnownMembers((prev) => rememberMember(prev, joinedNickname))
-          setOnlineCount(users.length)
-        })
-
-        newConnection.on('NotifyUserJoined', (joinedNickname) => {
           setMessages((prev) => [
             ...prev,
             {
@@ -274,12 +288,16 @@ function ChatApp() {
 
         setConnection(newConnection)
         setIsConnected(true)
-
         await newConnection.invoke('JoinRoom', roomId, currentNickname)
       } catch (error) {
         console.error('Connection failed:', error)
         setIsConnected(false)
-        setTimeout(() => initializeConnection(), 5000)
+        if (activeConnection) {
+          const failedConnection = activeConnection
+          activeConnection = null
+          await failedConnection.stop().catch(console.error)
+        }
+        scheduleReconnect()
       }
     }
 
@@ -287,6 +305,9 @@ function ChatApp() {
 
     return () => {
       cancelled = true
+      if (retryTimeout !== null) {
+        window.clearTimeout(retryTimeout)
+      }
       if (activeConnection) {
         activeConnection.stop()
       }
@@ -301,6 +322,8 @@ function ChatApp() {
     const interval = window.setInterval(() => setCurrentTime(Date.now()), 60000)
     return () => window.clearInterval(interval)
   }, [])
+
+  useEffect(() => {
     if (!isEditingRoomName) {
       setRoomNameDraft(roomInfo.displayName)
     }
@@ -312,8 +335,9 @@ function ChatApp() {
       return
     }
 
-    setCurrentNickname(nickname.trim())
-    window.localStorage.setItem('chat.nickname', nickname.trim())
+    const nextNickname = nickname.trim()
+    setCurrentNickname(nextNickname)
+    window.localStorage.setItem('chat.nickname', nextNickname)
     setShowChat(true)
   }
 
@@ -327,11 +351,10 @@ function ChatApp() {
       textFormat.bold ||
       textFormat.italic ||
       textFormat.underline
+
     const content = hasFormatting
       ? `${FORMATTED_MESSAGE_PREFIX}${JSON.stringify({ text, ...textFormat })}`
       : text
-    const content = messageInput.trim()
-    if (!content || !connection) return
 
     try {
       await connection.invoke('SendMessage', roomId, currentNickname, content)
@@ -415,6 +438,7 @@ function ChatApp() {
       alert('Tên hiển thị không được để trống.')
       return
     }
+
     window.localStorage.setItem('chat.nickname', nextNickname)
     setKnownMembers((prev) => rememberMember(prev, nextNickname))
     setCurrentNickname(nextNickname)
@@ -467,7 +491,9 @@ function ChatApp() {
     }
   }
 
-  const formatTime = (timestamp) => new Date(timestamp).toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit' })
+  const formatTime = (timestamp) =>
+    new Date(timestamp).toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit' })
+
   const formatLastSeen = (timestamp) => {
     const lastSeenTime = new Date(timestamp).getTime()
     if (!Number.isFinite(lastSeenTime)) return 'Ngoại tuyến'
@@ -485,23 +511,6 @@ function ChatApp() {
         <div className="login-topbar">
           <ThemeToggle theme={theme} onToggle={toggleTheme} />
         </div>
-  const escapeHtml = (text) => {
-    const map = {
-      '&': '&amp;',
-      '<': '&lt;',
-      '>': '&gt;',
-      '"': '&quot;',
-      "'": '&#039;',
-    }
-
-    return text.replace(/[&<>"']/g, (match) => map[match])
-  }
-
-  const formatTime = (timestamp) => new Date(timestamp).toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit' })
-
-  if (!showChat) {
-    return (
-      <div className="nickname-container">
         <div className="nickname-modal">
           <div className="brand-mark">💬</div>
           <h1>Realtime Chat</h1>
@@ -516,7 +525,7 @@ function ChatApp() {
             onKeyDown={handleNicknameKeyPress}
             autoFocus
           />
-          <button className="start-button" onClick={handleStartChat}>
+          <button className="start-button" type="button" onClick={handleStartChat}>
             Vào Phòng Chat
           </button>
         </div>
@@ -527,11 +536,24 @@ function ChatApp() {
   return (
     <div className="chat-container active" data-theme={theme}>
       <div className="chat-shell">
-        {showMobileSidebar && <button className="sidebar-backdrop" onClick={() => setShowMobileSidebar(false)} aria-label="Đóng danh sách thành viên" />}
+        {showMobileSidebar && (
+          <button
+            className="sidebar-backdrop"
+            type="button"
+            onClick={() => setShowMobileSidebar(false)}
+            aria-label="Đóng danh sách thành viên"
+          />
+        )}
+
         <aside className={`chat-sidebar ${showMobileSidebar ? 'mobile-open' : ''}`}>
           <div className="sidebar-profile">
             <div className="profile-avatar-wrap">
-              <button className="avatar-upload-button" type="button" onClick={() => avatarInputRef.current?.click()} aria-label="Đổi ảnh đại diện">
+              <button
+                className="avatar-upload-button"
+                type="button"
+                onClick={() => avatarInputRef.current?.click()}
+                aria-label="Đổi ảnh đại diện"
+              >
                 <img className="profile-avatar" src={avatarSrc} alt={`Avatar của ${currentNickname}`} />
                 <span className="avatar-edit-hint" aria-hidden="true">✎</span>
               </button>
@@ -542,22 +564,46 @@ function ChatApp() {
               <div className="profile-name">{currentNickname}</div>
               <div className="profile-presence">Đang hoạt động</div>
             </div>
-            <button className="icon-button quick-settings-button" type="button" onClick={() => setShowQuickSettings((value) => !value)} aria-label="Cài đặt tài khoản" aria-expanded={showQuickSettings}>⚙</button>
+            <button
+              className="icon-button quick-settings-button"
+              type="button"
+              onClick={() => setShowQuickSettings((value) => !value)}
+              aria-label="Cài đặt tài khoản"
+              aria-expanded={showQuickSettings}
+            >
+              ⚙
+            </button>
             {showQuickSettings && (
               <div className="quick-settings-panel">
                 <strong>Cài đặt nhanh</strong>
                 <label htmlFor="nickname-setting">Tên hiển thị</label>
                 <div className="quick-settings-row">
-                  <input id="nickname-setting" value={nickname} maxLength="20" onChange={(event) => setNickname(event.target.value)} />
+                  <input
+                    id="nickname-setting"
+                    value={nickname}
+                    maxLength="20"
+                    onChange={(event) => setNickname(event.target.value)}
+                  />
                   <button type="button" onClick={handleUpdateNickname}>Lưu</button>
                 </div>
                 <ThemeToggle theme={theme} onToggle={toggleTheme} className="settings-theme-toggle" />
-                <button className="text-action" type="button" onClick={() => avatarInputRef.current?.click()}>Đổi ảnh đại diện</button>
-                <button className="logout-action" type="button" onClick={handleLogout}>↪ <span>Đăng xuất</span></button>
+                <button className="text-action" type="button" onClick={() => avatarInputRef.current?.click()}>
+                  Đổi ảnh đại diện
+                </button>
+                <button className="logout-action" type="button" onClick={handleLogout}>
+                  ↪ <span>Đăng xuất</span>
+                </button>
               </div>
             )}
           </div>
-          <input ref={avatarInputRef} className="visually-hidden" type="file" accept="image/png,image/jpeg,image/webp,image/gif" onChange={handleAvatarChange} />
+
+          <input
+            ref={avatarInputRef}
+            className="visually-hidden"
+            type="file"
+            accept="image/png,image/jpeg,image/webp,image/gif"
+            onChange={handleAvatarChange}
+          />
 
           <div className="sidebar-block">
             <div className="sidebar-block-title">
@@ -565,72 +611,72 @@ function ChatApp() {
               <span>Danh sách thành viên</span>
               <span className="sidebar-pill">{knownMembers.length}</span>
             </div>
+
             <div className="member-tabs" role="tablist" aria-label="Lọc thành viên">
-              <button className={memberFilter === 'all' ? 'active' : ''} type="button" role="tab" aria-selected={memberFilter === 'all'} onClick={() => setMemberFilter('all')}>Tất cả <span>{knownMembers.length}</span></button>
-              <button className={memberFilter === 'online' ? 'active' : ''} type="button" role="tab" aria-selected={memberFilter === 'online'} onClick={() => setMemberFilter('online')}>Đang online <span>{onlineMemberCount}</span></button>
+              <button
+                className={memberFilter === 'all' ? 'active' : ''}
+                type="button"
+                role="tab"
+                aria-selected={memberFilter === 'all'}
+                onClick={() => setMemberFilter('all')}
+              >
+                Tất cả <span>{knownMembers.length}</span>
+              </button>
+              <button
+                className={memberFilter === 'online' ? 'active' : ''}
+                type="button"
+                role="tab"
+                aria-selected={memberFilter === 'online'}
+                onClick={() => setMemberFilter('online')}
+              >
+                Đang online <span>{onlineMemberCount}</span>
+              </button>
             </div>
+
             <div className="online-users-list">
               {visibleMembers.length === 0 ? (
-                <div className="empty-state">{memberFilter === 'online' ? 'Chưa có ai đang online' : 'Chưa có thành viên nào'}</div>
+                <div className="empty-state">
+                  {memberFilter === 'online' ? 'Chưa có ai đang online' : 'Chưa có thành viên nào'}
+                </div>
               ) : (
                 visibleMembers.map((member) => {
                   const isOnline = onlineMemberNames.has(member.nickname)
                   const isMine = member.nickname === currentNickname
+
                   return (
                     <div key={member.nickname} className={`online-user ${isMine ? 'self' : ''}`}>
                       <div className="member-avatar-wrap">
                         {isMine ? (
-                          <button className="member-avatar-button" type="button" onClick={() => avatarInputRef.current?.click()} aria-label="Đổi ảnh đại diện">
+                          <button
+                            className="member-avatar-button"
+                            type="button"
+                            onClick={() => avatarInputRef.current?.click()}
+                            aria-label="Đổi ảnh đại diện"
+                          >
                             <img className="member-avatar" src={avatarSrc} alt={`Avatar của ${member.nickname}`} />
                           </button>
                         ) : (
-                          <img className="member-avatar" src={member.avatar || defaultAvatarSrc} alt={`Avatar của ${member.nickname}`} />
+                          <img
+                            className="member-avatar"
+                            src={member.avatar || defaultAvatarSrc}
+                            alt={`Avatar của ${member.nickname}`}
+                          />
                         )}
                         <span className={`member-presence-dot ${isOnline ? 'online' : ''}`} />
                       </div>
+
                       <div className="member-meta">
                         <div className="member-name">
                           {member.nickname}
                           {isMine && <span className="member-badge">Bạn</span>}
                         </div>
-                        <div className={`member-status ${isOnline ? 'is-online' : ''}`}>{isOnline ? 'Đang hoạt động' : formatLastSeen(member.lastSeen)}</div>
+                        <div className={`member-status ${isOnline ? 'is-online' : ''}`}>
+                          {isOnline ? 'Đang hoạt động' : formatLastSeen(member.lastSeen)}
+                        </div>
                       </div>
                     </div>
                   )
                 })
-    <div className="chat-container active">
-      <div className="chat-shell">
-        <aside className="chat-sidebar">
-          <div className="sidebar-profile">
-            <img className="profile-avatar" src={defaultAvatarSrc} alt="Avatar mặc định" />
-            <div>
-              <div className="profile-label">Tài khoản của bạn</div>
-              <div className="profile-name">{currentNickname}</div>
-            </div>
-          </div>
-
-          <div className="sidebar-block">
-            <div className="sidebar-block-title">
-              <span>👥</span>
-              <span>Đang online</span>
-              <span className="sidebar-pill">{onlineCount}</span>
-            </div>
-            <div className="online-users-list">
-                {onlineUsers.length === 0 ? (
-                  <div className="empty-state">Chưa có ai online</div>
-                ) : (
-                  onlineUsers.map((user) => (
-                    <div key={user.connectionId} className={`online-user ${user.nickname === currentNickname ? 'self' : ''}`}>
-                      <img className="member-avatar" src={defaultAvatarSrc} alt="Avatar mặc định" />
-                      <div className="member-meta">
-                        <div className="member-name">
-                          {user.nickname}
-                        {user.nickname === currentNickname && <span className="member-badge">Bạn</span>}
-                      </div>
-                      <div className="member-status">Đang hoạt động</div>
-                    </div>
-                  </div>
-                ))
               )}
             </div>
           </div>
@@ -639,16 +685,24 @@ function ChatApp() {
             <span className="connection-dot" />
             <span>{isConnected ? 'Đã kết nối' : 'Mất kết nối'}</span>
             <span className="connection-label">SignalR</span>
-            {isConnected ? '🟢 Kết nối' : '🔴 Mất kết nối'}
           </div>
         </aside>
 
         <main className="chat-main">
           <header className="chat-header">
             <div className="chat-header-left">
-              <button className="mobile-members-button" type="button" onClick={() => setShowMobileSidebar(true)} aria-label="Mở danh sách thành viên">☰</button>
+              <button
+                className="mobile-members-button"
+                type="button"
+                onClick={() => setShowMobileSidebar(true)}
+                aria-label="Mở danh sách thành viên"
+              >
+                ☰
+              </button>
+
               <div className="chat-room-icon">✦</div>
               <div className="chat-room-icon">💬</div>
+
               <div className="room-title-wrap">
                 <div className="room-title-row">
                   {isEditingRoomName ? (
@@ -662,6 +716,7 @@ function ChatApp() {
                   ) : (
                     <h2>{roomLabel}</h2>
                   )}
+
                   {!isEditingRoomName && (
                     <button
                       className="icon-button"
@@ -675,6 +730,7 @@ function ChatApp() {
                       ✎
                     </button>
                   )}
+
                   {isEditingRoomName && (
                     <button
                       className="icon-button"
@@ -690,19 +746,54 @@ function ChatApp() {
                     </button>
                   )}
                 </div>
-                <p className="room-subtitle"><span className="room-online-dot" />{onlineMemberCount}/{knownMembers.length} online <span className="subtitle-divider">·</span> Phòng chat</p>
+                <p className="room-subtitle">
+                  <span className="room-online-dot" />
+                  {onlineMemberCount}/{knownMembers.length} online
+                  <span className="subtitle-divider">·</span>
+                  Phòng chat
+                </p>
               </div>
             </div>
+
             <div className="chat-header-right">
-              <span className="room-chip"><span className="room-online-dot" />{onlineMemberCount} online</span>
-              <button className="icon-button room-menu-button" type="button" aria-label="Cài đặt phòng chat" aria-expanded={showRoomMenu} onClick={() => setShowRoomMenu((value) => !value)}>•••</button>
+              <span className="room-chip">
+                <span className="room-online-dot" />
+                {onlineMemberCount} online
+              </span>
+              <button
+                className="icon-button room-menu-button"
+                type="button"
+                aria-label="Cài đặt phòng chat"
+                aria-expanded={showRoomMenu}
+                onClick={() => setShowRoomMenu((value) => !value)}
+              >
+                •••
+              </button>
+
               {showRoomMenu && (
                 <div className="room-menu-panel">
                   <strong>Cài đặt phòng</strong>
                   <span>{roomLabel}</span>
                   <span>{knownMembers.length} thành viên đã tham gia</span>
-                  <button type="button" onClick={() => { setRoomNameDraft(roomInfo.displayName); setIsEditingRoomName(true); setShowRoomMenu(false) }}>✎ Đổi tên phòng</button>
-                  <button type="button" onClick={() => { setShowMobileSidebar(true); setShowRoomMenu(false) }}>♙ Xem thành viên</button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setRoomNameDraft(roomInfo.displayName)
+                      setIsEditingRoomName(true)
+                      setShowRoomMenu(false)
+                    }}
+                  >
+                    ✎ Đổi tên phòng
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setShowMobileSidebar(true)
+                      setShowRoomMenu(false)
+                    }}
+                  >
+                    ♙ Xem thành viên
+                  </button>
                 </div>
               )}
             </div>
@@ -716,37 +807,31 @@ function ChatApp() {
                 <span>Gửi lời chào đầu tiên đến mọi người trong phòng nhé.</span>
               </div>
             )}
+
             {messages.map((msg, index) =>
               msg.type === 'system' ? (
-                <div key={index} className="system-message">
-                  <span className="system-message-icon">✦</span>{msg.content}
+                <div key={`${msg.nickname}-${index}`} className="system-message">
+                  <span className="system-message-icon">✦</span>
+                  {msg.content}
                 </div>
               ) : (
-                <div key={index} className={`message ${msg.isMine ? 'mine' : ''}`}>
-                  <img className="message-avatar" src={msg.isMine ? avatarSrc : knownMembers.find((member) => member.nickname === msg.nickname)?.avatar || defaultAvatarSrc} alt={`Avatar của ${msg.nickname}`} />
+                <div key={`${msg.nickname}-${msg.timestamp}-${index}`} className={`message ${msg.isMine ? 'mine' : ''}`}>
+                  <img
+                    className="message-avatar"
+                    src={
+                      msg.isMine
+                        ? avatarSrc
+                        : knownMembers.find((member) => member.nickname === msg.nickname)?.avatar || defaultAvatarSrc
+                    }
+                    alt={`Avatar của ${msg.nickname}`}
+                  />
                   <div className="message-bubble">
                     <div className="message-meta">
                       <div className="message-nickname">{msg.nickname}</div>
                     </div>
-                    <div className="message-content" style={msg.style || undefined}>{msg.content}</div>
-              <span className="room-chip">{onlineCount} online</span>
-            </div>
-          </header>
-
-              <div className="messages-area">
-            {messages.map((msg, index) =>
-              msg.type === 'system' ? (
-                <div key={index} className="system-message">
-                  {msg.content}
-                </div>
-              ) : (
-                <div key={index} className={`message ${msg.isMine ? 'mine' : ''}`}>
-                  <img className="message-avatar" src={defaultAvatarSrc} alt="Avatar mặc định" />
-                  <div className="message-bubble">
-                    <div className="message-meta">
-                      <div className="message-nickname">{escapeHtml(msg.nickname)}</div>
+                    <div className="message-content" style={msg.style || undefined}>
+                      {msg.content}
                     </div>
-                    <div className="message-content">{escapeHtml(msg.content)}</div>
                     <div className="message-timestamp">{formatTime(msg.timestamp)}</div>
                   </div>
                 </div>
@@ -760,35 +845,110 @@ function ChatApp() {
               <div className="formatting-toolbar" aria-label="Định dạng tin nhắn">
                 <label className="color-picker-control" title="Màu chữ">
                   <span className="formatting-label">Màu chữ</span>
-                  <input aria-label="Chọn màu chữ" type="color" value={textFormat.color} onChange={(event) => setTextFormat((format) => ({ ...format, color: event.target.value }))} />
+                  <input
+                    aria-label="Chọn màu chữ"
+                    type="color"
+                    value={textFormat.color}
+                    onChange={(event) => setTextFormat((format) => ({ ...format, color: event.target.value }))}
+                  />
                 </label>
+
                 <span className="toolbar-divider" />
                 <span className="formatting-label">Cỡ chữ</span>
                 <div className="font-size-presets" role="group" aria-label="Cỡ chữ">
-                  {[{ label: 'Nhỏ', size: 13 }, { label: 'Vừa', size: 16 }, { label: 'Lớn', size: 20 }].map(({ label, size }) => (
-                    <button className={textFormat.fontSize === size ? 'active' : ''} key={label} type="button" aria-pressed={textFormat.fontSize === size} onClick={() => setTextFormat((format) => ({ ...format, fontSize: size }))}>{label}</button>
-                  ))}
+                  {[{ label: 'Nhỏ', size: 13 }, { label: 'Vừa', size: 16 }, { label: 'Lớn', size: 20 }].map(
+                    ({ label, size }) => (
+                      <button
+                        className={textFormat.fontSize === size ? 'active' : ''}
+                        key={label}
+                        type="button"
+                        aria-pressed={textFormat.fontSize === size}
+                        onClick={() => setTextFormat((format) => ({ ...format, fontSize: size }))}
+                      >
+                        {label}
+                      </button>
+                    ),
+                  )}
                 </div>
+
                 <span className="toolbar-divider" />
-                <button className={`format-button ${textFormat.bold ? 'active' : ''}`} type="button" aria-label="In đậm" aria-pressed={textFormat.bold} onClick={() => setTextFormat((format) => ({ ...format, bold: !format.bold }))}><strong>B</strong></button>
-                <button className={`format-button ${textFormat.italic ? 'active' : ''}`} type="button" aria-label="In nghiêng" aria-pressed={textFormat.italic} onClick={() => setTextFormat((format) => ({ ...format, italic: !format.italic }))}><em>I</em></button>
-                <button className={`format-button ${textFormat.underline ? 'active' : ''}`} type="button" aria-label="Gạch chân" aria-pressed={textFormat.underline} onClick={() => setTextFormat((format) => ({ ...format, underline: !format.underline }))}><u>U</u></button>
+                <button
+                  className={`format-button ${textFormat.bold ? 'active' : ''}`}
+                  type="button"
+                  aria-label="In đậm"
+                  aria-pressed={textFormat.bold}
+                  onClick={() => setTextFormat((format) => ({ ...format, bold: !format.bold }))}
+                >
+                  <strong>B</strong>
+                </button>
+                <button
+                  className={`format-button ${textFormat.italic ? 'active' : ''}`}
+                  type="button"
+                  aria-label="In nghiêng"
+                  aria-pressed={textFormat.italic}
+                  onClick={() => setTextFormat((format) => ({ ...format, italic: !format.italic }))}
+                >
+                  <em>I</em>
+                </button>
+                <button
+                  className={`format-button ${textFormat.underline ? 'active' : ''}`}
+                  type="button"
+                  aria-label="Gạch chân"
+                  aria-pressed={textFormat.underline}
+                  onClick={() => setTextFormat((format) => ({ ...format, underline: !format.underline }))}
+                >
+                  <u>U</u>
+                </button>
               </div>
             )}
+
             {showEmojiPicker && (
               <div className="emoji-picker-panel">
-                <div className="emoji-picker-heading"><strong>Emoji & sticker</strong><button type="button" aria-label="Đóng bảng emoji" onClick={() => setShowEmojiPicker(false)}>×</button></div>
+                <div className="emoji-picker-heading">
+                  <strong>Emoji & sticker</strong>
+                  <button type="button" aria-label="Đóng bảng emoji" onClick={() => setShowEmojiPicker(false)}>
+                    ×
+                  </button>
+                </div>
                 <div className="emoji-grid">
-                  {['😀', '😂', '🥰', '😎', '🤔', '😭', '🔥', '❤️', '👍', '🎉', '✨', '🙌', '👋', '💜', '🚀', '🥳'].map((emoji) => (
-                    <button key={emoji} type="button" onClick={() => appendToMessage(emoji)} aria-label={`Thêm ${emoji}`}>{emoji}</button>
+                  {['😀', '😂', '🥰', '😎', '🤔', '😭', '🔥', '❤️', '👍', '🎉', '✨', '🙌', '👋', '💜', '🚀', '🥳'].map(
+                    (emoji) => (
+                      <button key={emoji} type="button" onClick={() => appendToMessage(emoji)} aria-label={`Thêm ${emoji}`}>
+                        {emoji}
+                      </button>
+                    ),
+                  )}
+                </div>
+                <div className="sticker-row">
+                  <span>Sticker nhanh</span>
+                  {['🫶', '🤝', '🌟', '💌'].map((sticker) => (
+                    <button key={sticker} type="button" onClick={() => appendToMessage(`${sticker} `)}>
+                      {sticker}
+                    </button>
                   ))}
                 </div>
-                <div className="sticker-row"><span>Sticker nhanh</span>{['🫶', '🤝', '🌟', '💌'].map((sticker) => <button key={sticker} type="button" onClick={() => appendToMessage(`${sticker} `)}>{sticker}</button>)}</div>
               </div>
             )}
+
             <div className="input-area">
-              <button className={`composer-tool-button ${showEmojiPicker ? 'active' : ''}`} type="button" aria-label="Mở emoji và sticker" aria-expanded={showEmojiPicker} onClick={() => setShowEmojiPicker((value) => !value)}>☺</button>
-              <button className={`composer-tool-button format-toggle ${showFormatting ? 'active' : ''}`} type="button" aria-label="Định dạng tin nhắn" aria-expanded={showFormatting} onClick={() => setShowFormatting((value) => !value)}>Aa</button>
+              <button
+                className={`composer-tool-button ${showEmojiPicker ? 'active' : ''}`}
+                type="button"
+                aria-label="Mở emoji và sticker"
+                aria-expanded={showEmojiPicker}
+                onClick={() => setShowEmojiPicker((value) => !value)}
+              >
+                ☺
+              </button>
+              <button
+                className={`composer-tool-button format-toggle ${showFormatting ? 'active' : ''}`}
+                type="button"
+                aria-label="Định dạng tin nhắn"
+                aria-expanded={showFormatting}
+                onClick={() => setShowFormatting((value) => !value)}
+              >
+                Aa
+              </button>
               <input
                 type="text"
                 className="message-input"
@@ -799,23 +959,11 @@ function ChatApp() {
                 onKeyDown={handleKeyPress}
                 aria-label="Nội dung tin nhắn"
               />
-              <button className="send-button" onClick={handleSendMessage} disabled={!messageInput.trim() || !isConnected}>
-                <span>Gửi</span><span className="send-arrow">↗</span>
+              <button className="send-button" type="button" onClick={handleSendMessage} disabled={!messageInput.trim() || !isConnected}>
+                <span>Gửi</span>
+                <span className="send-arrow">↗</span>
               </button>
             </div>
-          <div className="input-area">
-            <div className="composer-icon">✎</div>
-            <input
-              type="text"
-              className="message-input"
-              placeholder="Nhập tin nhắn..."
-              value={messageInput}
-              onChange={(event) => setMessageInput(event.target.value)}
-              onKeyDown={handleKeyPress}
-            />
-            <button className="send-button" onClick={handleSendMessage} disabled={!messageInput.trim() || !isConnected}>
-              Gửi
-            </button>
           </div>
         </main>
       </div>
