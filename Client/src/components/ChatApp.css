@@ -870,6 +870,11 @@ button {
 }
 
 .quick-settings-button {
+  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: none;
   width: 32px;
   height: 32px;
   border-radius: 10px;
@@ -1155,6 +1160,11 @@ button {
 }
 
 .room-title-row .icon-button {
+  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: none;
   width: 28px;
   height: 28px;
   border: 0;
@@ -1205,6 +1215,11 @@ button {
 }
 
 .room-menu-button {
+  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: none;
   width: 34px;
   height: 34px;
   border-radius: 10px;
@@ -1425,7 +1440,11 @@ button {
 }
 
 .format-button {
-  display: grid;
+  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: none;
   width: 28px;
   height: 28px;
   place-items: center;
@@ -1451,13 +1470,15 @@ button {
 }
 
 .composer-tool-button {
-  display: grid;
+  align-items: center;
+  padding: 0;
+  display: inline-flex;
+  justify-content: center;
+  border: none;
   width: 38px;
   height: 38px;
   flex: 0 0 auto;
   place-items: center;
-  border: 1px solid rgba(148, 163, 184, 0.12);
-  border-radius: 11px;
   background: #171d27;
   color: #b8a5f3;
   cursor: pointer;
@@ -1472,6 +1493,11 @@ button {
 }
 
 .composer-tool-button.format-toggle {
+  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: none;
   font-size: 12px;
   font-weight: 700;
 }
