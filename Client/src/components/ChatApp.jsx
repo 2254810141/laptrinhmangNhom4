@@ -1,4 +1,4 @@
-﻿import { useEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import * as signalR from '@microsoft/signalr'
 import './ChatApp.css'
 
@@ -109,7 +109,7 @@ function ChatApp() {
   const messagesEndRef = useRef(null)
 
   const roomId = roomInfo.roomId
-  const signalRUrl = import.meta.env.VITE_SIGNALR_URL || `http://${window.location.hostname}:5000/chathub`
+  const signalRUrl = import.meta.env.VITE_SIGNALR_URL || 'https://laptrinhmangnhom4backend.onrender.com/chathub'
 
   const roomLabel = useMemo(() => roomInfo.displayName || 'Phòng chat', [roomInfo.displayName])
   const onlineMemberNames = useMemo(() => new Set(onlineUsers.map((user) => user.nickname)), [onlineUsers])
