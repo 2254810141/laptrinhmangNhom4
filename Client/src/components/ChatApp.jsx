@@ -104,9 +104,15 @@ function ChatApp() {
     underline: false,
   })
   const [currentTime, setCurrentTime] = useState(() => Date.now())
+  const [loginStep, setLoginStep] = useState('name')
+  const [mousePosition, setMousePosition] = useState({ x: 0, y: 0 })
+  const [showWelcome, setShowWelcome] = useState(false)
 
   const avatarInputRef = useRef(null)
   const messagesEndRef = useRef(null)
+  const loginInputRef = useRef(null)
+  const particleCanvasRef = useRef(null)
+  const inputContainerRef = useRef(null)
 
   const roomId = roomInfo.roomId
   const signalRUrl = import.meta.env.VITE_SIGNALR_URL || 'https://laptrinhmangnhom4backend.onrender.com/chathub'
@@ -329,6 +335,132 @@ function ChatApp() {
     }
   }, [roomInfo.displayName, isEditingRoomName])
 
+  useEffect(() => {
+    if (!showChat) {
+      const canvas = particleCanvasRef.current
+      if (!canvas) return
+
+      const ctx = canvas.getContext('2d')
+      let particles = []
+      let animationFrameId
+      let fallingIntervalId
+
+      const resizeCanvas = () => {
+        canvas.width = window.innerWidth
+        canvas.height = window.innerHeight
+      }
+
+      resizeCanvas()
+      window.addEventListener('resize', resizeCanvas)
+
+      class Particle {
+        constructor(x, y, isFalling = false) {
+          this.x = x
+          this.y = y
+          this.size = isFalling ? Math.random() * 4 + 2 : Math.random() * 3 + 1
+          this.speedX = isFalling ? -(Math.random() * 1.5 + 0.5) : Math.random() * 2 - 1
+          this.speedY = isFalling ? Math.random() * 0.5 + 0.3 : Math.random() * 2 - 1
+          this.life = 1
+          this.decay = isFalling ? Math.random() * 0.003 + 0.001 : Math.random() * 0.02 + 0.01
+          this.color = isFalling ? 'rgba(255, 255, 255, 0.9)' : `hsl(${Math.random() * 60 + 200}, 80%, 80%)`
+          this.isFalling = isFalling
+        }
+
+        update() {
+          this.x += this.speedX
+          this.y += this.speedY
+          this.life -= this.decay
+          this.size *= 0.996
+
+          if (this.isFalling) {
+            if (this.y > canvas.height || this.x < 0) {
+              this.y = 0
+              this.x = canvas.width + Math.random() * 200
+              this.life = 1
+              this.size = Math.random() * 4 + 2
+            }
+          }
+        }
+
+        draw() {
+          ctx.beginPath()
+          ctx.fillStyle = this.color
+          ctx.globalAlpha = this.life
+
+          if (this.isFalling) {
+            // Draw meteor/star shape with tail
+            const tailLength = this.size * 4
+            ctx.moveTo(this.x, this.y - this.size)
+            ctx.lineTo(this.x + this.size * 0.3, this.y + this.size)
+            ctx.lineTo(this.x, this.y + tailLength)
+            ctx.lineTo(this.x - this.size * 0.3, this.y + this.size)
+            ctx.closePath()
+          } else {
+            // Sharp diamond shape for mouse particles
+            ctx.moveTo(this.x, this.y - this.size)
+            ctx.lineTo(this.x + this.size, this.y)
+            ctx.lineTo(this.x, this.y + this.size)
+            ctx.lineTo(this.x - this.size, this.y)
+            ctx.closePath()
+          }
+
+          ctx.fill()
+          ctx.globalAlpha = 1
+        }
+      }
+
+      const animate = () => {
+        ctx.clearRect(0, 0, canvas.width, canvas.height)
+
+        particles = particles.filter(p => p.life > 0)
+
+        particles.forEach(particle => {
+          particle.update()
+          particle.draw()
+        })
+
+        animationFrameId = requestAnimationFrame(animate)
+      }
+
+      animate()
+
+      const handleMouseMove = (e) => {
+        setMousePosition({ x: e.clientX, y: e.clientY })
+
+        const inputContainer = inputContainerRef.current
+        if (!inputContainer) return
+
+        const rect = inputContainer.getBoundingClientRect()
+        const isInsideInput =
+          e.clientX >= rect.left &&
+          e.clientX <= rect.right &&
+          e.clientY >= rect.top &&
+          e.clientY <= rect.bottom
+
+        if (!isInsideInput) {
+          for (let i = 0; i < 3; i++) {
+            particles.push(new Particle(e.clientX, e.clientY, false))
+          }
+        }
+      }
+
+      window.addEventListener('mousemove', handleMouseMove)
+
+      fallingIntervalId = setInterval(() => {
+        for (let i = 0; i < 5; i++) {
+          particles.push(new Particle(Math.random() * canvas.width, 0, true))
+        }
+      }, 50)
+
+      return () => {
+        window.removeEventListener('resize', resizeCanvas)
+        window.removeEventListener('mousemove', handleMouseMove)
+        cancelAnimationFrame(animationFrameId)
+        clearInterval(fallingIntervalId)
+      }
+    }
+  }, [showChat])
+
   const handleStartChat = () => {
     if (!nickname.trim()) {
       alert('Vui lòng nhập nickname!')
@@ -391,7 +523,29 @@ function ChatApp() {
 
   const handleNicknameKeyPress = (event) => {
     if (event.key === 'Enter') {
+      if (loginStep === 'name') {
+        handleNextStep()
+      } else if (loginStep === 'welcome') {
+        handleStartChat()
+      }
+    }
+  }
+
+  const handleNextStep = () => {
+    if (!nickname.trim()) {
+      alert('Vui lòng nhập nickname!')
+      return
+    }
+    setShowWelcome(true)
+
+    setTimeout(() => {
       handleStartChat()
+    }, 3000)
+  }
+
+  const handlePrevStep = () => {
+    if (loginStep === 'welcome') {
+      setLoginStep('name')
     }
   }
 
@@ -473,6 +627,7 @@ function ChatApp() {
     setShowQuickSettings(false)
     setShowMobileSidebar(false)
     setShowChat(false)
+    setShowWelcome(false)
   }
 
   const appendToMessage = (value) => {
@@ -506,28 +661,65 @@ function ChatApp() {
   }
 
   if (!showChat) {
+    const centerX = window.innerWidth / 2
+    const centerY = window.innerHeight / 2
+    const rotateX = (mousePosition.y - centerY) / 30
+    const rotateY = -(mousePosition.x - centerX) / 30
+    const translateX = (mousePosition.x - centerX) / 20
+    const translateY = (mousePosition.y - centerY) / 20
+
+    const parallaxStyle = {
+      transform: `perspective(1000px) rotateX(${rotateX}deg) rotateY(${rotateY}deg) translateX(${translateX}px) translateY(${translateY}px)`
+    }
+
     return (
       <div className="nickname-container" data-theme={theme}>
+        <canvas ref={particleCanvasRef} className="particle-canvas" />
         <div className="login-topbar">
           <ThemeToggle theme={theme} onToggle={toggleTheme} />
         </div>
-        <div className="nickname-modal">
-          <div className="brand-mark">💬</div>
-          <h1>Realtime Chat</h1>
-          <p>Nhập nickname để vào phòng chat nội bộ</p>
-          <input
-            type="text"
-            className="nickname-input"
-            placeholder="Nhập nickname..."
-            maxLength="20"
-            value={nickname}
-            onChange={(event) => setNickname(event.target.value)}
-            onKeyDown={handleNicknameKeyPress}
-            autoFocus
-          />
-          <button className="start-button" type="button" onClick={handleStartChat}>
-            Vào Phòng Chat
-          </button>
+        <div className="minimal-input-wrapper" style={parallaxStyle}>
+          {!showWelcome ? (
+            <div ref={inputContainerRef} className="minimal-input-container">
+              <div className="input-icon-wrapper">
+                <svg className="input-icon" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5">
+                  <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2" />
+                  <circle cx="12" cy="7" r="4" />
+                </svg>
+              </div>
+              <input
+                ref={loginInputRef}
+                type="text"
+                className="minimal-input"
+                placeholder="Name"
+                maxLength="20"
+                value={nickname}
+                onChange={(event) => setNickname(event.target.value)}
+                onKeyDown={handleNicknameKeyPress}
+                autoFocus
+              />
+              <button
+                className="input-arrow-button"
+                type="button"
+                onClick={handleNextStep}
+                aria-label="Tiếp tục"
+              >
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                  <polyline points="9 18 15 12 9 6" />
+                </svg>
+              </button>
+            </div>
+          ) : (
+            <div className="welcome-display">
+              <div className="welcome-icon">
+                <svg width="80" height="80" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5">
+                  <path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z" />
+                  <polyline points="22,6 12,13 2,6" />
+                </svg>
+              </div>
+              <div className="welcome-text">Welcome, {nickname}</div>
+            </div>
+          )}
         </div>
       </div>
     )
