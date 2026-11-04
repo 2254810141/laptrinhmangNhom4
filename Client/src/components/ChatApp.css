@@ -420,6 +420,8 @@ body::before {
   place-items: center;
   flex: 0 0 auto;
   border-radius: 999px;
+  line-height: 1;
+  text-align: center;
 }
 
 .profile-avatar {
@@ -1114,11 +1116,6 @@ button {
 }
 
 .quick-settings-button {
-  padding: 0;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  border: none;
   width: 32px;
   height: 32px;
   border-radius: 10px;
@@ -1370,7 +1367,6 @@ button {
   position: relative;
   border-radius: 18px;
 }
-
 .chat-header {
   min-height: 78px;
   padding: 15px 22px;
@@ -1379,17 +1375,26 @@ button {
 }
 
 .chat-header-left {
+  display: flex;
+  align-items: center;
   gap: 12px;
 }
+
 
 .chat-room-icon {
   width: 44px;
   height: 44px;
+  display: grid;
+  place-items: center;
+  padding: 0;
   border: 1px solid rgba(196, 181, 253, 0.18);
   background: linear-gradient(140deg, #463574, #244a54);
   color: #d4c8ff;
   font-size: 19px;
+  line-height: 1;
+  text-align: center;
   box-shadow: 0 7px 22px rgba(104, 73, 182, 0.15);
+  flex-shrink: 0;
 }
 
 .chat-header h2 {
@@ -1404,11 +1409,6 @@ button {
 }
 
 .room-title-row .icon-button {
-  padding: 0;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  border: none;
   width: 28px;
   height: 28px;
   border: 0;
@@ -1459,11 +1459,6 @@ button {
 }
 
 .room-menu-button {
-  padding: 0;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  border: none;
   width: 34px;
   height: 34px;
   border-radius: 10px;
@@ -1684,11 +1679,7 @@ button {
 }
 
 .format-button {
-  padding: 0;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  border: none;
+  display: grid;
   width: 28px;
   height: 28px;
   place-items: center;
@@ -1714,15 +1705,13 @@ button {
 }
 
 .composer-tool-button {
-  align-items: center;
-  padding: 0;
-  display: inline-flex;
-  justify-content: center;
-  border: none;
+  display: grid;
   width: 38px;
   height: 38px;
   flex: 0 0 auto;
   place-items: center;
+  border: 1px solid rgba(148, 163, 184, 0.12);
+  border-radius: 11px;
   background: #171d27;
   color: #b8a5f3;
   cursor: pointer;
@@ -1737,11 +1726,6 @@ button {
 }
 
 .composer-tool-button.format-toggle {
-  padding: 0;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  border: none;
   font-size: 12px;
   font-weight: 700;
 }
