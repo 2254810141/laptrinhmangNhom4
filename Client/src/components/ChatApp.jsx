@@ -701,7 +701,6 @@ function ChatApp() {
               </button>
 
               <div className="chat-room-icon">✦</div>
-              <div className="chat-room-icon">💬</div>
 
               <div className="room-title-wrap">
                 <div className="room-title-row">
