@@ -1124,18 +1124,7 @@ button {
   border-radius: 18px;
 }
 
-.chat-header {
-  min-height: 78px;
-  padding: 15px 22px;
-  background: rgba(17, 23, 32, 0.98);
-  border-bottom-color: rgba(148, 163, 184, 0.1);
-}
 
-.chat-header-left {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-}
 
 .chat-room-icon {
   width: 44px;
