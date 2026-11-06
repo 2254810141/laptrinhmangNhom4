@@ -69,6 +69,17 @@ namespace RealtimeChatAPI.Hubs
 
         public async Task JoinRoom(string roomId, string nickname)
         {
+            if (string.IsNullOrWhiteSpace(roomId)
+                || roomId.Length > 100
+                || !System.Text.RegularExpressions.Regex.IsMatch(roomId, @"^[a-z\d-]+$", System.Text.RegularExpressions.RegexOptions.IgnoreCase)
+                || string.IsNullOrWhiteSpace(nickname)
+                || nickname.Length > 20)
+            {
+                throw new HubException("Mã phòng hoặc tên hiển thị không hợp lệ.");
+            }
+
+            var room = await _chatService.GetOrCreateRoomAsync(roomId);
+
             await Groups.AddToGroupAsync(Context.ConnectionId, roomId);
 
             lock (_lock)
@@ -81,7 +92,6 @@ namespace RealtimeChatAPI.Hubs
                 _onlineUsers[roomId][Context.ConnectionId] = nickname;
             }
 
-            var room = await _chatService.GetOrCreateRoomAsync(roomId);
             await _chatService.UpsertRoomMemberAsync(roomId, nickname);
             var history = await _chatService.GetMessageHistoryAsync(roomId);
             var members = await _chatService.GetRoomMembersAsync(roomId);
@@ -105,11 +115,33 @@ namespace RealtimeChatAPI.Hubs
             Console.WriteLine($"User {nickname} joined room {roomId}");
         }
 
+        public async Task CreateRoom(string roomId, string displayName, string nickname)
+        {
+            if (string.IsNullOrWhiteSpace(roomId)
+                || roomId.Length > 100
+                || !roomId.StartsWith("room-", StringComparison.OrdinalIgnoreCase)
+                || string.IsNullOrWhiteSpace(displayName)
+                || displayName.Trim().Length > 50
+                || string.IsNullOrWhiteSpace(nickname)
+                || nickname.Length > 20)
+            {
+                throw new HubException("Thông tin phòng chat không hợp lệ.");
+            }
+
+            if (await _chatService.GetRoomAsync(roomId) != null)
+            {
+                throw new HubException("Mã phòng đã tồn tại. Hãy tạo lại phòng.");
+            }
+
+            await _chatService.CreateRoomAsync(roomId, displayName);
+            await JoinRoom(roomId, nickname);
+        }
+
         public async Task UpdateRoomName(string roomId, string displayName)
         {
-            if (string.IsNullOrWhiteSpace(displayName))
+            if (string.IsNullOrWhiteSpace(displayName) || !IsConnectionInRoom(roomId, null))
             {
-                return;
+                throw new HubException("Bạn cần tham gia phòng chat để đổi tên phòng.");
             }
 
             var room = await _chatService.UpdateRoomNameAsync(roomId, displayName);
@@ -160,6 +192,11 @@ namespace RealtimeChatAPI.Hubs
 
         public async Task SendMessage(string roomId, string nickname, string content)
         {
+            if (!IsConnectionInRoom(roomId, nickname))
+            {
+                throw new HubException("Bạn cần tham gia phòng chat để gửi tin nhắn.");
+            }
+
             if (string.IsNullOrWhiteSpace(content))
                 return;
 
@@ -231,6 +268,16 @@ namespace RealtimeChatAPI.Hubs
                     connectionId = user.Key,
                     nickname = user.Value
                 }).Cast<object>().ToList();
+            }
+        }
+
+        private bool IsConnectionInRoom(string roomId, string? nickname)
+        {
+            lock (_lock)
+            {
+                return _onlineUsers.TryGetValue(roomId, out var users)
+                    && users.TryGetValue(Context.ConnectionId, out var joinedNickname)
+                    && (nickname == null || joinedNickname == nickname);
             }
         }
     }

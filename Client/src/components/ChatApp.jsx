@@ -1,8 +1,31 @@
-﻿import { useEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import * as signalR from '@microsoft/signalr'
 import './ChatApp.css'
 
 const FORMATTED_MESSAGE_PREFIX = '[[chat-format-v1]]'
+const DEFAULT_ROOM = { roomId: 'default-room', displayName: 'Phòng chung' }
+
+function readSavedRooms() {
+  try {
+    const savedRooms = JSON.parse(window.localStorage.getItem('chat.rooms') || '[]')
+    if (!Array.isArray(savedRooms)) throw new Error('Danh sách phòng đã lưu không hợp lệ.')
+    return savedRooms.filter((room) =>
+      room
+      && typeof room.roomId === 'string'
+      && typeof room.displayName === 'string',
+    )
+  } catch (error) {
+    console.error('Error reading saved rooms:', error)
+    return []
+  }
+}
+
+function saveRoom(room) {
+  const savedRooms = readSavedRooms()
+  const nextRooms = [room, ...savedRooms.filter((savedRoom) => savedRoom.roomId !== room.roomId)]
+  window.localStorage.setItem('chat.rooms', JSON.stringify(nextRooms))
+  return nextRooms
+}
 
 function readFormattedMessage(content) {
   if (!content || !content.startsWith(FORMATTED_MESSAGE_PREFIX)) {
@@ -83,14 +106,18 @@ function ChatApp() {
   const [messageInput, setMessageInput] = useState('')
   const [onlineUsers, setOnlineUsers] = useState([])
   const [knownMembers, setKnownMembers] = useState([])
+  const [rooms, setRooms] = useState([])
+  const [roomForm, setRoomForm] = useState(null)
+  const [roomCodeInput, setRoomCodeInput] = useState('')
+  const [roomActionError, setRoomActionError] = useState('')
   const [memberFilter, setMemberFilter] = useState('all')
-  const [roomInfo, setRoomInfo] = useState({ roomId: 'default-room', displayName: 'Hội ae rok' })
-  const [roomNameDraft, setRoomNameDraft] = useState('Hội ae rok')
+  const [roomInfo, setRoomInfo] = useState(DEFAULT_ROOM)
+  const [roomNameDraft, setRoomNameDraft] = useState('')
   const [onlineCount, setOnlineCount] = useState(0)
   const [isEditingRoomName, setIsEditingRoomName] = useState(false)
   const [isSavingRoomName, setIsSavingRoomName] = useState(false)
   const [isConnected, setIsConnected] = useState(false)
-  const [showChat, setShowChat] = useState(Boolean(savedNickname))
+  const [showChat, setShowChat] = useState(false)
   const [showQuickSettings, setShowQuickSettings] = useState(false)
   const [showRoomMenu, setShowRoomMenu] = useState(false)
   const [showEmojiPicker, setShowEmojiPicker] = useState(false)
@@ -104,12 +131,16 @@ function ChatApp() {
     underline: false,
   })
   const [currentTime, setCurrentTime] = useState(() => Date.now())
-
   const avatarInputRef = useRef(null)
   const messagesEndRef = useRef(null)
+  const loginInputRef = useRef(null)
+  const particleCanvasRef = useRef(null)
+  const inputContainerRef = useRef(null)
+  const parallaxRef = useRef(null)
+  const shouldStickToBottomRef = useRef(true)
 
   const roomId = roomInfo.roomId
-  const signalRUrl = import.meta.env.VITE_SIGNALR_URL || `http://${window.location.hostname}:5000/chathub`
+  const signalRUrl = import.meta.env.VITE_SIGNALR_URL || 'https://laptrinhmangnhom4backend.onrender.com/chathub'
 
   const roomLabel = useMemo(() => roomInfo.displayName || 'Phòng chat', [roomInfo.displayName])
   const onlineMemberNames = useMemo(() => new Set(onlineUsers.map((user) => user.nickname)), [onlineUsers])
@@ -146,6 +177,7 @@ function ChatApp() {
     const initializeConnection = async () => {
       if (cancelled) return
 
+      let roomJoinAttempted = false
       try {
         const newConnection = new signalR.HubConnectionBuilder()
           .withUrl(signalRUrl, {
@@ -175,8 +207,27 @@ function ChatApp() {
         })
 
         newConnection.on('RoomInfoLoaded', (room) => {
-          setRoomInfo(room)
-          setRoomNameDraft(room.displayName)
+          const savedRoom = readSavedRooms().find((item) => item.roomId === room.roomId)
+          const roomInfoToShow = savedRoom ? { ...room, displayName: savedRoom.displayName } : room
+          setRoomInfo(roomInfoToShow)
+          setRoomNameDraft(roomInfoToShow.displayName)
+          try {
+            saveRoom(roomInfoToShow)
+            setRooms((current) => [
+              roomInfoToShow,
+              ...current.filter((item) => item.roomId !== roomInfoToShow.roomId),
+            ])
+          } catch (error) {
+            console.error('Error saving joined room:', error)
+            setRoomActionError('Đã vào phòng nhưng không thể lưu phòng trên thiết bị này.')
+          }
+
+          if (savedRoom && savedRoom.displayName !== room.displayName) {
+            newConnection.invoke('UpdateRoomName', room.roomId, savedRoom.displayName).catch((error) => {
+              console.error('Error syncing saved room name:', error)
+              setRoomActionError('Không thể đồng bộ tên phòng với máy chủ.')
+            })
+          }
         })
 
         newConnection.on('RoomNameUpdated', (room) => {
@@ -184,6 +235,13 @@ function ChatApp() {
           setRoomNameDraft(room.displayName)
           setIsEditingRoomName(false)
           setIsSavingRoomName(false)
+          try {
+            saveRoom(room)
+            setRooms((current) => [room, ...current.filter((item) => item.roomId !== room.roomId)])
+          } catch (error) {
+            console.error('Error saving room name:', error)
+            setRoomActionError('Không thể lưu tên phòng trên thiết bị này.')
+          }
         })
 
         newConnection.on('ReceiveMessage', (data) => {
@@ -288,6 +346,7 @@ function ChatApp() {
 
         setConnection(newConnection)
         setIsConnected(true)
+        roomJoinAttempted = true
         await newConnection.invoke('JoinRoom', roomId, currentNickname)
       } catch (error) {
         console.error('Connection failed:', error)
@@ -297,7 +356,13 @@ function ChatApp() {
           activeConnection = null
           await failedConnection.stop().catch(console.error)
         }
-        scheduleReconnect()
+        if (roomJoinAttempted) {
+          setConnection(null)
+          setShowChat(false)
+          setRoomActionError('Không thể vào hoặc tạo phòng. Hãy kiểm tra kết nối và thử lại.')
+        } else {
+          scheduleReconnect()
+        }
       }
     }
 
@@ -315,8 +380,16 @@ function ChatApp() {
   }, [showChat, currentNickname, roomId, signalRUrl])
 
   useEffect(() => {
-    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' })
+    if (!shouldStickToBottomRef.current) return
+
+    const behavior = window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth'
+    messagesEndRef.current?.scrollIntoView({ behavior, block: 'end' })
   }, [messages])
+
+  const handleMessagesScroll = (event) => {
+    const { scrollHeight, scrollTop, clientHeight } = event.currentTarget
+    shouldStickToBottomRef.current = scrollHeight - scrollTop - clientHeight <= 96
+  }
 
   useEffect(() => {
     const interval = window.setInterval(() => setCurrentTime(Date.now()), 60000)
@@ -329,17 +402,154 @@ function ChatApp() {
     }
   }, [roomInfo.displayName, isEditingRoomName])
 
-  const handleStartChat = () => {
-    if (!nickname.trim()) {
-      alert('Vui lòng nhập nickname!')
-      return
-    }
+  useEffect(() => {
+    if (!showChat) {
+      const canvas = particleCanvasRef.current
+      if (!canvas) return
 
-    const nextNickname = nickname.trim()
-    setCurrentNickname(nextNickname)
-    window.localStorage.setItem('chat.nickname', nextNickname)
-    setShowChat(true)
-  }
+      const ctx = canvas.getContext('2d')
+      const prefersReducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches
+      const hasFinePointer = window.matchMedia('(pointer: fine)').matches
+      if (!ctx || prefersReducedMotion || !hasFinePointer) return undefined
+
+      let particles = []
+      let animationFrameId
+      let fallingIntervalId
+      let pointerFrameId = null
+      let lastParticleAt = 0
+      let pointerPosition = { x: 0, y: 0 }
+
+      const resizeCanvas = () => {
+        canvas.width = window.innerWidth
+        canvas.height = window.innerHeight
+      }
+
+      resizeCanvas()
+      window.addEventListener('resize', resizeCanvas)
+
+      class Particle {
+        constructor(x, y, isFalling = false) {
+          this.x = x
+          this.y = y
+          this.size = isFalling ? Math.random() * 4 + 2 : Math.random() * 3 + 1
+          this.speedX = isFalling ? -(Math.random() * 1.5 + 0.5) : Math.random() * 2 - 1
+          this.speedY = isFalling ? Math.random() * 0.5 + 0.3 : Math.random() * 2 - 1
+          this.life = 1
+          this.decay = isFalling ? Math.random() * 0.003 + 0.001 : Math.random() * 0.02 + 0.01
+          this.color = isFalling ? 'rgba(255, 255, 255, 0.9)' : `hsl(${Math.random() * 60 + 200}, 80%, 80%)`
+          this.isFalling = isFalling
+        }
+
+        update() {
+          this.x += this.speedX
+          this.y += this.speedY
+          this.life -= this.decay
+          this.size *= 0.996
+
+          if (this.isFalling) {
+            if (this.y > canvas.height || this.x < 0) {
+              this.y = 0
+              this.x = canvas.width + Math.random() * 200
+              this.life = 1
+              this.size = Math.random() * 4 + 2
+            }
+          }
+        }
+
+        draw() {
+          ctx.beginPath()
+          ctx.fillStyle = this.color
+          ctx.globalAlpha = this.life
+
+          if (this.isFalling) {
+            // Draw meteor/star shape with tail
+            const tailLength = this.size * 4
+            ctx.moveTo(this.x, this.y - this.size)
+            ctx.lineTo(this.x + this.size * 0.3, this.y + this.size)
+            ctx.lineTo(this.x, this.y + tailLength)
+            ctx.lineTo(this.x - this.size * 0.3, this.y + this.size)
+            ctx.closePath()
+          } else {
+            // Sharp diamond shape for mouse particles
+            ctx.moveTo(this.x, this.y - this.size)
+            ctx.lineTo(this.x + this.size, this.y)
+            ctx.lineTo(this.x, this.y + this.size)
+            ctx.lineTo(this.x - this.size, this.y)
+            ctx.closePath()
+          }
+
+          ctx.fill()
+          ctx.globalAlpha = 1
+        }
+      }
+
+      const animate = () => {
+        ctx.clearRect(0, 0, canvas.width, canvas.height)
+
+        particles = particles.filter(p => p.life > 0)
+
+        particles.forEach(particle => {
+          particle.update()
+          particle.draw()
+        })
+
+        animationFrameId = requestAnimationFrame(animate)
+      }
+
+      animate()
+
+      const handleMouseMove = (e) => {
+        pointerPosition = { x: e.clientX, y: e.clientY }
+        if (pointerFrameId === null) {
+          pointerFrameId = requestAnimationFrame(() => {
+            pointerFrameId = null
+            const centerX = window.innerWidth / 2
+            const centerY = window.innerHeight / 2
+            const rotateX = (pointerPosition.y - centerY) / 30
+            const rotateY = -(pointerPosition.x - centerX) / 30
+            const translateX = (pointerPosition.x - centerX) / 20
+            const translateY = (pointerPosition.y - centerY) / 20
+
+            if (parallaxRef.current) {
+              parallaxRef.current.style.transform =
+                `perspective(1000px) rotateX(${rotateX}deg) rotateY(${rotateY}deg) translateX(${translateX}px) translateY(${translateY}px)`
+            }
+          })
+        }
+
+        const inputContainer = inputContainerRef.current
+        if (!inputContainer) return
+
+        const rect = inputContainer.getBoundingClientRect()
+        const isInsideInput =
+          e.clientX >= rect.left &&
+          e.clientX <= rect.right &&
+          e.clientY >= rect.top &&
+          e.clientY <= rect.bottom
+
+        if (!isInsideInput && Date.now() - lastParticleAt >= 32 && particles.length < 120) {
+          particles.push(new Particle(e.clientX, e.clientY, false))
+          lastParticleAt = Date.now()
+        }
+      }
+
+      window.addEventListener('mousemove', handleMouseMove)
+
+      fallingIntervalId = setInterval(() => {
+        if (particles.length < 120) {
+          particles.push(new Particle(Math.random() * canvas.width, 0, true))
+        }
+      }, 250)
+
+      return () => {
+        window.removeEventListener('resize', resizeCanvas)
+        window.removeEventListener('mousemove', handleMouseMove)
+        cancelAnimationFrame(animationFrameId)
+        if (pointerFrameId !== null) cancelAnimationFrame(pointerFrameId)
+        clearInterval(fallingIntervalId)
+      }
+    }
+  }, [showChat])
 
   const handleSendMessage = async () => {
     const text = messageInput.trim()
@@ -382,6 +592,63 @@ function ChatApp() {
     }
   }
 
+  const switchRoom = (room) => {
+    if (room.roomId === roomId) return
+
+    setMessages([])
+    setOnlineUsers([])
+    setKnownMembers([])
+    setIsEditingRoomName(false)
+    setRoomInfo(room)
+    setConnection(null)
+    setIsConnected(false)
+    setShowMobileSidebar(false)
+    setRoomActionError('')
+  }
+
+  const handleJoinRoom = (event) => {
+    event.preventDefault()
+    const nextNickname = nickname.trim()
+    if (!nextNickname) {
+      setRoomActionError('Vui lòng nhập nickname.')
+      return
+    }
+
+    const roomId = roomCodeInput.trim()
+    if (!/^[a-z\d-]{1,100}$/i.test(roomId)) {
+      setRoomActionError('Mã phòng không hợp lệ.')
+      return
+    }
+
+    const room = rooms.find((item) => item.roomId === roomId)
+      || { roomId, displayName: `Phòng ${roomId.slice(0, 12)}` }
+
+    try {
+      window.localStorage.setItem('chat.nickname', nextNickname)
+    } catch (error) {
+      console.error('Error saving nickname:', error)
+      setRoomActionError('Không thể lưu nickname trên thiết bị này.')
+      return
+    }
+
+    setCurrentNickname(nextNickname)
+    setRoomCodeInput('')
+    setRoomForm(null)
+    setRoomActionError('')
+    switchRoom(room)
+    setShowChat(true)
+  }
+
+  const handleCopyRoomCode = async (room) => {
+    try {
+      await window.navigator.clipboard.writeText(room.roomId)
+      setRoomActionError('')
+    } catch (error) {
+      console.error('Error copying room code:', error)
+      setRoomActionError('Không thể sao chép mã. Hãy chọn và sao chép mã hiển thị bên cạnh tên phòng.')
+    }
+  }
+
   const handleKeyPress = (event) => {
     if (event.key === 'Enter' && !event.shiftKey) {
       event.preventDefault()
@@ -391,8 +658,29 @@ function ChatApp() {
 
   const handleNicknameKeyPress = (event) => {
     if (event.key === 'Enter') {
-      handleStartChat()
+      handleNextStep()
     }
+  }
+
+  const handleNextStep = () => {
+    const nextNickname = nickname.trim()
+    if (!nextNickname) {
+      setRoomActionError('Vui lòng nhập nickname.')
+      return
+    }
+
+    try {
+      window.localStorage.setItem('chat.nickname', nextNickname)
+    } catch (error) {
+      console.error('Error saving nickname:', error)
+      setRoomActionError('Không thể lưu nickname trên thiết bị này.')
+      return
+    }
+
+    setCurrentNickname(nextNickname)
+    setRoomInfo(DEFAULT_ROOM)
+    setRoomActionError('')
+    setShowChat(true)
   }
 
   const handleAvatarChange = (event) => {
@@ -470,9 +758,13 @@ function ChatApp() {
     setMessages([])
     setNickname('')
     setCurrentNickname('')
+    setRooms([])
     setShowQuickSettings(false)
     setShowMobileSidebar(false)
     setShowChat(false)
+    setRoomCodeInput('')
+    setRoomActionError('')
+    setRoomInfo(DEFAULT_ROOM)
   }
 
   const appendToMessage = (value) => {
@@ -508,26 +800,51 @@ function ChatApp() {
   if (!showChat) {
     return (
       <div className="nickname-container" data-theme={theme}>
+        <canvas ref={particleCanvasRef} className="particle-canvas" />
         <div className="login-topbar">
           <ThemeToggle theme={theme} onToggle={toggleTheme} />
         </div>
-        <div className="nickname-modal">
-          <div className="brand-mark">💬</div>
-          <h1>Realtime Chat</h1>
-          <p>Nhập nickname để vào phòng chat nội bộ</p>
-          <input
-            type="text"
-            className="nickname-input"
-            placeholder="Nhập nickname..."
-            maxLength="20"
-            value={nickname}
-            onChange={(event) => setNickname(event.target.value)}
-            onKeyDown={handleNicknameKeyPress}
-            autoFocus
-          />
-          <button className="start-button" type="button" onClick={handleStartChat}>
-            Vào Phòng Chat
-          </button>
+        <div ref={parallaxRef} className="minimal-input-wrapper">
+          <div className="login-content">
+            <div className="login-heading">
+              <span className="login-heading-icon" aria-hidden="true">
+                <svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7">
+                  <path d="M20 11.5a7.5 7.5 0 0 1-7.5 7.5H7l-4 2v-5.5A7.5 7.5 0 1 1 20 11.5Z" />
+                  <path d="M8 11h8M8 14h5" />
+                </svg>
+              </span>
+              <div className="login-heading-title">Phòng chat</div>
+              <div className="login-heading-caption">Bắt đầu trò chuyện cùng mọi người</div>
+            </div>
+            <div ref={inputContainerRef} className="minimal-input-container">
+              <div className="input-icon-wrapper">
+                <svg className="input-icon" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5">
+                  <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2" />
+                  <circle cx="12" cy="7" r="4" />
+                </svg>
+              </div>
+              <input
+                ref={loginInputRef}
+                type="text"
+                className="minimal-input"
+                placeholder="Name"
+                aria-label="Tên hiển thị"
+                maxLength="20"
+                value={nickname}
+                onChange={(event) => setNickname(event.target.value)}
+                onKeyDown={handleNicknameKeyPress}
+                autoFocus
+              />
+              <button
+                className="input-arrow-button"
+                type="button"
+                onClick={handleNextStep}
+                aria-label="Vào phòng chung"
+                title="Vào phòng chung"
+              />
+            </div>
+          </div>
+          {roomActionError && <div className="room-action-error" role="alert">{roomActionError}</div>}
         </div>
       </div>
     )
@@ -545,7 +862,11 @@ function ChatApp() {
           />
         )}
 
-        <aside className={`chat-sidebar ${showMobileSidebar ? 'mobile-open' : ''}`}>
+        <aside
+          id="chat-members-sidebar"
+          className={`chat-sidebar ${showMobileSidebar ? 'mobile-open' : ''}`}
+          aria-label="Thành viên phòng chat"
+        >
           <div className="sidebar-profile">
             <div className="profile-avatar-wrap">
               <button
@@ -605,6 +926,68 @@ function ChatApp() {
             onChange={handleAvatarChange}
           />
 
+          <div className="sidebar-block room-list-block">
+            <div className="sidebar-block-title">
+              <span className="members-title-icon">▣</span>
+              <span>Phòng chat</span>
+              <span className="sidebar-pill">{rooms.length}</span>
+            </div>
+            <div className="room-actions">
+              <button
+                type="button"
+                onClick={() => {
+                  setRoomForm((form) => form === 'join' ? null : 'join')
+                  setRoomActionError('')
+                }}
+              >
+                Vào hoặc tạo bằng mã
+              </button>
+            </div>
+
+            {roomForm === 'join' && (
+              <form className="room-create-form" onSubmit={handleJoinRoom}>
+                <input
+                  aria-label="Mã phòng"
+                  placeholder="Nhập mã để vào hoặc tạo phòng"
+                  maxLength={100}
+                  value={roomCodeInput}
+                  onChange={(event) => setRoomCodeInput(event.target.value)}
+                />
+                <button type="submit" disabled={!roomCodeInput.trim()}>Vào hoặc tạo phòng</button>
+              </form>
+            )}
+
+            {roomActionError && <div className="room-action-error" role="alert">{roomActionError}</div>}
+
+            <div className="room-entry-list" aria-label="Các phòng đã tham gia trên thiết bị">
+              {rooms.map((room) => (
+                <div className={`room-entry ${room.roomId === roomId ? 'active' : ''}`} key={room.roomId}>
+                  <button
+                    className="room-entry-select"
+                    type="button"
+                    onClick={() => switchRoom(room)}
+                    aria-current={room.roomId === roomId ? 'page' : undefined}
+                  >
+                    <span aria-hidden="true">#</span>
+                    <span className="room-entry-name">
+                      <strong>{room.displayName}</strong>
+                      <small>{room.roomId}</small>
+                    </span>
+                  </button>
+                  <button
+                    className="room-copy-button"
+                    type="button"
+                    onClick={() => handleCopyRoomCode(room)}
+                    title="Sao chép mã mời"
+                    aria-label={`Sao chép mã phòng ${room.displayName}`}
+                  >
+                    ⧉
+                  </button>
+                </div>
+              ))}
+            </div>
+          </div>
+
           <div className="sidebar-block">
             <div className="sidebar-block-title">
               <span className="members-title-icon">◉</span>
@@ -612,12 +995,11 @@ function ChatApp() {
               <span className="sidebar-pill">{knownMembers.length}</span>
             </div>
 
-            <div className="member-tabs" role="tablist" aria-label="Lọc thành viên">
+            <div className="member-tabs" role="group" aria-label="Lọc thành viên">
               <button
                 className={memberFilter === 'all' ? 'active' : ''}
                 type="button"
-                role="tab"
-                aria-selected={memberFilter === 'all'}
+                aria-pressed={memberFilter === 'all'}
                 onClick={() => setMemberFilter('all')}
               >
                 Tất cả <span>{knownMembers.length}</span>
@@ -625,8 +1007,7 @@ function ChatApp() {
               <button
                 className={memberFilter === 'online' ? 'active' : ''}
                 type="button"
-                role="tab"
-                aria-selected={memberFilter === 'online'}
+                aria-pressed={memberFilter === 'online'}
                 onClick={() => setMemberFilter('online')}
               >
                 Đang online <span>{onlineMemberCount}</span>
@@ -681,7 +1062,12 @@ function ChatApp() {
             </div>
           </div>
 
-          <div className={`connection-status ${isConnected ? 'connected' : 'disconnected'}`}>
+          <div
+            className={`connection-status ${isConnected ? 'connected' : 'disconnected'}`}
+            role="status"
+            aria-live="polite"
+            aria-atomic="true"
+          >
             <span className="connection-dot" />
             <span>{isConnected ? 'Đã kết nối' : 'Mất kết nối'}</span>
             <span className="connection-label">SignalR</span>
@@ -696,12 +1082,14 @@ function ChatApp() {
                 type="button"
                 onClick={() => setShowMobileSidebar(true)}
                 aria-label="Mở danh sách thành viên"
+                aria-controls="chat-members-sidebar"
+                aria-expanded={showMobileSidebar}
               >
                 ☰
               </button>
 
-              <div className="chat-room-icon">✦</div>
-              <div className="chat-room-icon">💬</div>
+              <div className="chat-room-icon" aria-hidden="true">✦</div>
+              <div className="chat-room-icon" aria-hidden="true">💬</div>
 
               <div className="room-title-wrap">
                 <div className="room-title-row">
@@ -799,7 +1187,15 @@ function ChatApp() {
             </div>
           </header>
 
-          <div className="messages-area">
+          <div
+            className="messages-area"
+            role="log"
+            aria-label="Tin nhắn phòng chat"
+            aria-live="polite"
+            aria-relevant="additions text"
+            tabIndex={0}
+            onScroll={handleMessagesScroll}
+          >
             {messages.length === 0 && (
               <div className="chat-welcome">
                 <div className="welcome-sparkle">✦</div>
@@ -811,7 +1207,7 @@ function ChatApp() {
             {messages.map((msg, index) =>
               msg.type === 'system' ? (
                 <div key={`${msg.nickname}-${index}`} className="system-message">
-                  <span className="system-message-icon">✦</span>
+                  <span className="system-message-icon" aria-hidden="true">✦</span>
                   {msg.content}
                 </div>
               ) : (
@@ -922,7 +1318,12 @@ function ChatApp() {
                 <div className="sticker-row">
                   <span>Sticker nhanh</span>
                   {['🫶', '🤝', '🌟', '💌'].map((sticker) => (
-                    <button key={sticker} type="button" onClick={() => appendToMessage(`${sticker} `)}>
+                    <button
+                      key={sticker}
+                      type="button"
+                      aria-label={`Thêm sticker ${sticker}`}
+                      onClick={() => appendToMessage(`${sticker} `)}
+                    >
                       {sticker}
                     </button>
                   ))}

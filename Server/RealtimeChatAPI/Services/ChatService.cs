@@ -7,7 +7,9 @@ namespace RealtimeChatAPI.Services
     {
         Task<List<ChatMessage>> GetMessageHistoryAsync(string roomId, int limit = 50);
         Task SaveMessageAsync(ChatMessage message);
+        Task<ChatRoom?> GetRoomAsync(string roomId);
         Task<ChatRoom> GetOrCreateRoomAsync(string roomId);
+        Task<ChatRoom> CreateRoomAsync(string roomId, string displayName);
         Task<ChatRoom> UpdateRoomNameAsync(string roomId, string displayName);
         Task<List<ChatMember>> GetRoomMembersAsync(string roomId);
         Task UpsertRoomMemberAsync(string roomId, string nickname);
@@ -68,20 +70,33 @@ namespace RealtimeChatAPI.Services
             await _messagesCollection.InsertOneAsync(message);
         }
 
+        public async Task<ChatRoom?> GetRoomAsync(string roomId)
+        {
+            return await _roomsCollection.Find(r => r.RoomId == roomId).FirstOrDefaultAsync();
+        }
+
         public async Task<ChatRoom> GetOrCreateRoomAsync(string roomId)
         {
-            var room = await _roomsCollection.Find(r => r.RoomId == roomId).FirstOrDefaultAsync();
-            if (room != null)
-            {
-                return room.DisplayName == "Phòng chat"
-                    ? await UpdateRoomNameAsync(roomId, "Hội ae rok")
-                    : room;
-            }
+            var displayName = roomId == "default-room" ? "Phòng chung" : $"Phòng {roomId}";
+            return await _roomsCollection.FindOneAndUpdateAsync<ChatRoom, ChatRoom>(
+                room => room.RoomId == roomId,
+                Builders<ChatRoom>.Update
+                    .SetOnInsert(room => room.RoomId, roomId)
+                    .SetOnInsert(room => room.DisplayName, displayName)
+                    .SetOnInsert(room => room.UpdatedAt, DateTime.UtcNow),
+                new FindOneAndUpdateOptions<ChatRoom, ChatRoom>
+                {
+                    IsUpsert = true,
+                    ReturnDocument = ReturnDocument.After
+                });
+        }
 
-            room = new ChatRoom
+        public async Task<ChatRoom> CreateRoomAsync(string roomId, string displayName)
+        {
+            var room = new ChatRoom
             {
                 RoomId = roomId,
-                DisplayName = "Phòng chat",
+                DisplayName = displayName.Trim(),
                 UpdatedAt = DateTime.UtcNow
             };
 

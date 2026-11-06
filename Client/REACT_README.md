@@ -128,18 +128,11 @@ const newConnection = new signalR.HubConnectionBuilder()
 
 Change `localhost:5000` to your backend URL if different.
 
-### Room ID
+### Private chat rooms
 
-Edit `ChatApp.jsx` line ~176:
-
-```javascript
-const roomId = 'default-room'  // <- Change this
-```
-
-All users join the same room. To implement multiple rooms:
-1. Add room selection UI
-2. Store selected room in state
-3. Pass `roomId` from state instead of hardcoded
+Enter a room code to join an existing room. The room list only contains rooms
+that have been joined during the current session. Use **Create room** to create
+a room and share its generated code with the people you want to invite.
 
 ## 📱 Responsive Design
 
@@ -364,7 +357,7 @@ const [isDark, setIsDark] = useState(false)
 - Frontend runs on `http://localhost:5173`
 - Backend runs on `http://localhost:5000`
 - Make sure both are running for chat to work
-- Default room: `default-room`
+- Room codes are required to join; there is no public default room
 - Auto-reconnect if connection drops
 
 ## 🎉 Happy Chatting!

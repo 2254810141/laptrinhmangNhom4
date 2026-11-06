@@ -186,9 +186,10 @@ Database Test:
    - Collection: "messages"
    - Auto-created on first message
 
-3. DEFAULT ROOM: "default-room"
-   - All users join same room
-   - Can be modified in wwwroot/index.html (const roomId)
+3. PRIVATE ROOMS
+   - Enter a room code to join an existing room
+   - Create a room to generate a new code, then share it with invitees
+   - There is no public default room
 
 4. MESSAGE HISTORY: Shows last 50 messages
    - Change in Services/ChatService.cs (limit = 50)
