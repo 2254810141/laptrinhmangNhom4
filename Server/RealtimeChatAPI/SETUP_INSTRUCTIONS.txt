@@ -123,6 +123,16 @@ Multiple Users Test:
   5. Check "Online Users" count increases
   6. Close one tab → Online count decreases
 
+Private Chat Test:
+  1. Join the same room from two clients using different nicknames
+  2. Select the other member and start a 1-1 conversation
+  3. Send a private message and verify it appears only in that conversation
+  4. Reopen the conversation and verify its history is restored
+
+The current SignalR hub exposes GetPrivateMessageHistory(roomId, nickname,
+otherNickname) and SendPrivateMessage(roomId, nickname, recipientNickname,
+content). Run this version of RealtimeChatAPI when using the updated client.
+
 Database Test:
   1. Open: https://www.mongodb.com/products/platform/atlas
   2. Go to your cluster → Collections → RealtimeChatDB → messages

@@ -19,6 +19,13 @@ namespace RealtimeChatAPI.Models
 
         [BsonElement("roomId")]
         public string RoomId { get; set; } = string.Empty;
+
+        [BsonElement("recipientNickname")]
+        [BsonIgnoreIfNull]
+        public string? RecipientNickname { get; set; }
+
+        [BsonElement("isPrivate")]
+        public bool IsPrivate { get; set; }
     }
 }
 

@@ -119,7 +119,10 @@ namespace RealtimeChatAPI.Hubs
         {
             if (string.IsNullOrWhiteSpace(roomId)
                 || roomId.Length > 100
-                || !roomId.StartsWith("room-", StringComparison.OrdinalIgnoreCase)
+                || !System.Text.RegularExpressions.Regex.IsMatch(
+                    roomId,
+                    @"^room-[a-z\d-]+$",
+                    System.Text.RegularExpressions.RegexOptions.IgnoreCase)
                 || string.IsNullOrWhiteSpace(displayName)
                 || displayName.Trim().Length > 50
                 || string.IsNullOrWhiteSpace(nickname)
@@ -222,8 +225,103 @@ namespace RealtimeChatAPI.Hubs
             Console.WriteLine($"Message from {nickname} in {roomId}: {content}");
         }
 
+        public async Task<List<object>> GetPrivateMessageHistory(
+            string roomId,
+            string nickname,
+            string otherNickname)
+        {
+            if (!IsConnectionInRoom(roomId, nickname)
+                || string.IsNullOrWhiteSpace(otherNickname)
+                || otherNickname.Length > 20
+                || nickname == otherNickname)
+            {
+                throw new HubException("Cuộc trò chuyện riêng không hợp lệ.");
+            }
+
+            var members = await _chatService.GetRoomMembersAsync(roomId);
+            if (!members.Any(member => member.Nickname == otherNickname))
+            {
+                throw new HubException("Người nhận chưa tham gia phòng này.");
+            }
+
+            var history = await _chatService.GetPrivateMessageHistoryAsync(roomId, nickname, otherNickname);
+            return history.Select(message => new
+            {
+                id = message.Id.ToString(),
+                nickname = message.Nickname,
+                recipientNickname = message.RecipientNickname,
+                isPrivate = message.IsPrivate,
+                content = message.Content,
+                timestamp = message.Timestamp
+            }).Cast<object>().ToList();
+        }
+
+        public async Task SendPrivateMessage(string roomId, string nickname, string recipientNickname, string content)
+        {
+            if (!IsConnectionInRoom(roomId, nickname))
+            {
+                throw new HubException("Bạn cần tham gia phòng chat để gửi tin nhắn.");
+            }
+
+            if (string.IsNullOrWhiteSpace(recipientNickname)
+                || recipientNickname.Length > 20
+                || recipientNickname == nickname)
+            {
+                throw new HubException("Người nhận tin nhắn không hợp lệ.");
+            }
+
+            if (string.IsNullOrWhiteSpace(content))
+            {
+                return;
+            }
+
+            var members = await _chatService.GetRoomMembersAsync(roomId);
+            if (!members.Any(member => member.Nickname == recipientNickname))
+            {
+                throw new HubException("Người nhận chưa tham gia phòng này.");
+            }
+
+            var message = new ChatMessage
+            {
+                Nickname = nickname,
+                RecipientNickname = recipientNickname,
+                IsPrivate = true,
+                Content = content,
+                RoomId = roomId,
+                Timestamp = DateTime.UtcNow
+            };
+
+            await _chatService.SaveMessageAsync(message);
+
+            List<string> participantConnections;
+            lock (_lock)
+            {
+                participantConnections = _onlineUsers.TryGetValue(roomId, out var users)
+                    ? users
+                        .Where(user => user.Value == nickname || user.Value == recipientNickname)
+                        .Select(user => user.Key)
+                        .ToList()
+                    : new List<string>();
+            }
+
+            await Clients.Clients(participantConnections).SendAsync("ReceivePrivateMessage", new
+            {
+                id = message.Id.ToString(),
+                nickname = message.Nickname,
+                recipientNickname = message.RecipientNickname,
+                isPrivate = true,
+                content = message.Content,
+                timestamp = message.Timestamp
+            });
+        }
+
         public async Task LeaveRoom(string roomId, string nickname)
         {
+            if (!IsConnectionInRoom(roomId, nickname))
+            {
+                throw new HubException("Bạn chưa tham gia phòng này.");
+            }
+
             await Groups.RemoveFromGroupAsync(Context.ConnectionId, roomId);
 
             bool removed = false;
@@ -273,11 +371,26 @@ namespace RealtimeChatAPI.Hubs
 
         private bool IsConnectionInRoom(string roomId, string? nickname)
         {
+            if (string.IsNullOrWhiteSpace(roomId))
+            {
+                return false;
+            }
+
             lock (_lock)
             {
                 return _onlineUsers.TryGetValue(roomId, out var users)
                     && users.TryGetValue(Context.ConnectionId, out var joinedNickname)
                     && (nickname == null || joinedNickname == nickname);
+            }
+        }
+
+        private bool IsConnectionInAnyRoom(string nickname)
+        {
+            lock (_lock)
+            {
+                return _onlineUsers.Values.Any(users =>
+                    users.TryGetValue(Context.ConnectionId, out var joinedNickname)
+                    && joinedNickname == nickname);
             }
         }
     }

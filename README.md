@@ -16,6 +16,11 @@ Một ứng dụng chat trực tuyến đơn giản theo thời gian thực (Rea
 
 - 👤 Tham gia phòng chat chung: Người dùng chỉ cần nhập Tên hiển thị (Nickname) để bắt đầu trò chuyện.
 - 💬 Chat Realtime: Gửi và nhận tin nhắn tức thì cho tất cả mọi người đang online trong phòng.
+- 🔒 Chat riêng 1-1: Gửi tin nhắn theo cặp nickname giữa các thành viên cùng phòng; tin nhắn được lưu riêng, không phát vào phòng chung.
+- 🏠 Tạo phòng mới hoặc vào phòng bằng mã; có thể rời phòng và quay lại phòng chung.
+- 💌 Bắt đầu chat riêng 1-1 bằng cách chọn thành viên trong phòng.
+- 🏠 Lưu phòng theo nickname: Danh sách phòng đã tham gia được lưu riêng theo nickname trên thiết bị, có thể sao chép mã mời để chia sẻ.
+- ✨ Trải nghiệm đăng nhập: Hiển thị tên nickname đang nhập trước khi vào phòng.
 - ⏰ Thời gian gửi: Hiển thị mốc thời gian (Timestamp) dưới mỗi tin nhắn.
 
 ## 2. Các Project tham khảo + Link GitHub của các project đó
@@ -30,9 +35,10 @@ Nhóm tham khảo một số tài liệu và dự án liên quan đến SignalR 
 
 ## 3. Tóm tắt nhóm sẽ làm thêm / phát triển thêm những gì mà các project tham khảo chưa có hoặc chưa hoàn thiện
 
-Nhóm dự định phát triển thêm các phần sau:
+Nhóm đã phát triển thêm các phần sau:
 
 - Thiết kế giao diện riêng cho bài làm của nhóm.
 - Thêm chức năng đặt nickname và hiển thị danh sách người đang online.
 - Lưu lại nội dung chat để xem lại lịch sử tin nhắn.
-- Nếu kịp thời gian, nhóm sẽ mở rộng sang nhiều phòng chat và cải thiện trải nghiệm người dùng.
+- Mở rộng nhiều phòng chat, chat riêng 1-1 và lưu danh sách phòng theo nickname.
+- Cải thiện thao tác sao chép mã phòng và hiển thị nickname ở màn hình đăng nhập.

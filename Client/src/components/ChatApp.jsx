@@ -5,26 +5,80 @@ import './ChatApp.css'
 const FORMATTED_MESSAGE_PREFIX = '[[chat-format-v1]]'
 const DEFAULT_ROOM = { roomId: 'default-room', displayName: 'Phòng chung' }
 
-function readSavedRooms() {
+function roomStorageKey(nickname) {
+  return `chat.rooms.${encodeURIComponent(nickname)}`
+}
+
+function generateRoomId() {
+  const token = typeof window.crypto?.randomUUID === 'function'
+    ? window.crypto.randomUUID().replaceAll('-', '')
+    : `${Date.now().toString(36)}${Math.random().toString(36).slice(2)}`
+  return `room-${token.slice(0, 20)}`
+}
+
+function readSavedRooms(nickname, migrateLegacy = false) {
+  if (!nickname) return []
+
   try {
-    const savedRooms = JSON.parse(window.localStorage.getItem('chat.rooms') || '[]')
+    const storageKey = roomStorageKey(nickname)
+    const savedValue = window.localStorage.getItem(storageKey)
+    const legacyValue = savedValue === null && migrateLegacy
+      ? window.localStorage.getItem('chat.rooms')
+      : null
+    const savedRooms = JSON.parse(savedValue || legacyValue || '[]')
     if (!Array.isArray(savedRooms)) throw new Error('Danh sách phòng đã lưu không hợp lệ.')
-    return savedRooms.filter((room) =>
+    const rooms = savedRooms.filter((room) =>
       room
       && typeof room.roomId === 'string'
       && typeof room.displayName === 'string',
     )
+
+    if (savedValue === null && legacyValue !== null) {
+      window.localStorage.setItem(storageKey, JSON.stringify(rooms))
+      window.localStorage.removeItem('chat.rooms')
+    }
+
+    return rooms
   } catch (error) {
     console.error('Error reading saved rooms:', error)
     return []
   }
 }
 
-function saveRoom(room) {
-  const savedRooms = readSavedRooms()
+function saveRoom(room, nickname) {
+  const savedRooms = readSavedRooms(nickname)
   const nextRooms = [room, ...savedRooms.filter((savedRoom) => savedRoom.roomId !== room.roomId)]
-  window.localStorage.setItem('chat.rooms', JSON.stringify(nextRooms))
+  window.localStorage.setItem(roomStorageKey(nickname), JSON.stringify(nextRooms))
   return nextRooms
+}
+
+function privateChatStorageKey(nickname, roomId) {
+  return `chat.private.${encodeURIComponent(nickname)}.${encodeURIComponent(roomId)}`
+}
+
+function readPrivateChats(nickname, roomId) {
+  if (!nickname || !roomId) return []
+
+  try {
+    const savedValue = JSON.parse(window.localStorage.getItem(privateChatStorageKey(nickname, roomId)) || '[]')
+    return Array.isArray(savedValue)
+      ? [...new Set(savedValue.filter((recipient) => typeof recipient === 'string' && recipient))]
+      : []
+  } catch (error) {
+    console.error('Error reading private chats:', error)
+    return []
+  }
+}
+
+function savePrivateChat(nickname, roomId, recipient) {
+  if (!nickname || !roomId || !recipient) return []
+
+  const nextPrivateChats = [
+    recipient,
+    ...readPrivateChats(nickname, roomId).filter((item) => item !== recipient),
+  ]
+  window.localStorage.setItem(privateChatStorageKey(nickname, roomId), JSON.stringify(nextPrivateChats))
+  return nextPrivateChats
 }
 
 function readFormattedMessage(content) {
@@ -51,6 +105,28 @@ function readFormattedMessage(content) {
   } catch {
     return { text: content, style: null }
   }
+}
+
+function mapPrivateMessages(history, currentNickname) {
+  return history.map((message) => {
+    const parsedMessage = readFormattedMessage(message.content)
+    return {
+      ...message,
+      isPrivate: true,
+      content: parsedMessage.text,
+      style: parsedMessage.style,
+      type: 'message',
+      isMine: message.nickname === currentNickname,
+    }
+  })
+}
+
+function mergeMessagesById(currentMessages, incomingMessages) {
+  const existingIds = new Set(currentMessages.map((message) => message.id).filter(Boolean))
+  return [
+    ...currentMessages,
+    ...incomingMessages.filter((message) => !message.id || !existingIds.has(message.id)),
+  ]
 }
 
 function rememberMember(members, nickname, timestamp = new Date().toISOString()) {
@@ -86,7 +162,9 @@ function ThemeToggle({ theme, onToggle, className = '' }) {
 }
 
 function ChatApp() {
-  const savedNickname = typeof window !== 'undefined' ? window.localStorage.getItem('chat.nickname') || '' : ''
+  const [savedNickname] = useState(
+    () => typeof window !== 'undefined' ? window.localStorage.getItem('chat.nickname') || '' : '',
+  )
   const defaultAvatarSrc = '/default-avatar.svg'
 
   const [avatarSrc, setAvatarSrc] = useState(() => {
@@ -106,10 +184,16 @@ function ChatApp() {
   const [messageInput, setMessageInput] = useState('')
   const [onlineUsers, setOnlineUsers] = useState([])
   const [knownMembers, setKnownMembers] = useState([])
-  const [rooms, setRooms] = useState([])
+  const [rooms, setRooms] = useState(() => readSavedRooms(savedNickname, true))
+  const [privateChats, setPrivateChats] = useState(() => readPrivateChats(savedNickname, 'default-room'))
   const [roomForm, setRoomForm] = useState(null)
   const [roomCodeInput, setRoomCodeInput] = useState('')
+  const [roomNameInput, setRoomNameInput] = useState('')
+  const [privateChatRecipientInput, setPrivateChatRecipientInput] = useState('')
   const [roomActionError, setRoomActionError] = useState('')
+  const [copyFeedback, setCopyFeedback] = useState('')
+  const [isPrivateChat, setIsPrivateChat] = useState(false)
+  const [privateRecipient, setPrivateRecipient] = useState('')
   const [memberFilter, setMemberFilter] = useState('all')
   const [roomInfo, setRoomInfo] = useState(DEFAULT_ROOM)
   const [roomNameDraft, setRoomNameDraft] = useState('')
@@ -138,13 +222,42 @@ function ChatApp() {
   const inputContainerRef = useRef(null)
   const parallaxRef = useRef(null)
   const shouldStickToBottomRef = useRef(true)
+  const conversationRef = useRef({ isPrivateChat: false, privateRecipient: '' })
+  const privateHistoryRequestRef = useRef(0)
+  const pendingCreateRoomIdRef = useRef(null)
+
+  useEffect(() => {
+    if (!copyFeedback) return undefined
+
+    const timeoutId = window.setTimeout(() => setCopyFeedback(''), 1800)
+    return () => window.clearTimeout(timeoutId)
+  }, [copyFeedback])
 
   const roomId = roomInfo.roomId
-  const signalRUrl = import.meta.env.VITE_SIGNALR_URL || 'https://laptrinhmangnhom4backend.onrender.com/chathub'
+  const signalRUrl = import.meta.env.VITE_SIGNALR_URL
+    || (typeof window !== 'undefined' && ['localhost', '127.0.0.1'].includes(window.location.hostname)
+      ? `http://${window.location.hostname}:5000/chathub`
+      : 'https://laptrinhmangnhom4backend.onrender.com/chathub')
+  conversationRef.current = { isPrivateChat, privateRecipient }
+
+  useEffect(() => {
+    setPrivateChats(readPrivateChats(currentNickname, roomId))
+  }, [currentNickname, roomId])
 
   const roomLabel = useMemo(() => roomInfo.displayName || 'Phòng chat', [roomInfo.displayName])
   const onlineMemberNames = useMemo(() => new Set(onlineUsers.map((user) => user.nickname)), [onlineUsers])
   const onlineMemberCount = onlineMemberNames.size
+  const visibleMessages = useMemo(
+    () => messages.filter((message) =>
+      isPrivateChat
+        ? message.isPrivate && (
+            (message.nickname === currentNickname && message.recipientNickname === privateRecipient)
+            || (message.nickname === privateRecipient && message.recipientNickname === currentNickname)
+          )
+        : !message.isPrivate,
+    ),
+    [messages, isPrivateChat, currentNickname, privateRecipient],
+  )
 
   const visibleMembers = useMemo(
     () =>
@@ -194,6 +307,25 @@ function ChatApp() {
           try {
             await newConnection.invoke('JoinRoom', roomId, currentNickname)
             setIsConnected(true)
+            const conversation = conversationRef.current
+            if (conversation.isPrivateChat) {
+              try {
+                const history = await newConnection.invoke(
+                  'GetPrivateMessageHistory',
+                  roomId,
+                  currentNickname,
+                  conversation.privateRecipient,
+                )
+                if (conversationRef.current.privateRecipient === conversation.privateRecipient) {
+                  setMessages((current) => mergeMessagesById(
+                    current,
+                    mapPrivateMessages(history, currentNickname),
+                  ))
+                }
+              } catch (error) {
+                console.error('Failed to restore private conversation:', error)
+              }
+            }
           } catch (error) {
             console.error('Failed to rejoin chat room:', error)
             setIsConnected(false)
@@ -207,12 +339,15 @@ function ChatApp() {
         })
 
         newConnection.on('RoomInfoLoaded', (room) => {
-          const savedRoom = readSavedRooms().find((item) => item.roomId === room.roomId)
+          const savedRoom = readSavedRooms(currentNickname, currentNickname === savedNickname)
+            .find((item) => item.roomId === room.roomId)
           const roomInfoToShow = savedRoom ? { ...room, displayName: savedRoom.displayName } : room
-          setRoomInfo(roomInfoToShow)
-          setRoomNameDraft(roomInfoToShow.displayName)
+          if (pendingCreateRoomIdRef.current !== room.roomId) {
+            setRoomInfo(roomInfoToShow)
+            setRoomNameDraft(roomInfoToShow.displayName)
+          }
           try {
-            saveRoom(roomInfoToShow)
+            saveRoom(roomInfoToShow, currentNickname)
             setRooms((current) => [
               roomInfoToShow,
               ...current.filter((item) => item.roomId !== roomInfoToShow.roomId),
@@ -236,7 +371,7 @@ function ChatApp() {
           setIsEditingRoomName(false)
           setIsSavingRoomName(false)
           try {
-            saveRoom(room)
+            saveRoom(room, currentNickname)
             setRooms((current) => [room, ...current.filter((item) => item.roomId !== room.roomId)])
           } catch (error) {
             console.error('Error saving room name:', error)
@@ -260,9 +395,32 @@ function ChatApp() {
           setKnownMembers((prev) => rememberMember(prev, data.nickname, data.timestamp))
         })
 
+        newConnection.on('ReceivePrivateMessage', (data) => {
+          const otherNickname = data.nickname === currentNickname
+            ? data.recipientNickname
+            : data.nickname
+          setPrivateChats(savePrivateChat(currentNickname, roomId, otherNickname))
+          const conversation = conversationRef.current
+          if (!conversation.isPrivateChat || conversation.privateRecipient !== otherNickname) return
+
+          const parsedMessage = readFormattedMessage(data.content)
+          setMessages((prev) => mergeMessagesById(prev, [
+            {
+              nickname: data.nickname,
+              recipientNickname: data.recipientNickname,
+              id: data.id,
+              isPrivate: true,
+              content: parsedMessage.text,
+              style: parsedMessage.style,
+              timestamp: data.timestamp,
+              type: 'message',
+              isMine: data.nickname === currentNickname,
+            },
+          ]))
+        })
+
         newConnection.on('LoadHistory', (history) => {
-          setMessages(
-            history.map((msg) => {
+          const publicHistory = history.map((msg) => {
               const parsedMessage = readFormattedMessage(msg.content)
               return {
                 ...msg,
@@ -271,8 +429,19 @@ function ChatApp() {
                 type: 'message',
                 isMine: msg.nickname === currentNickname,
               }
-            }),
-          )
+          })
+          setMessages((previousMessages) => {
+            const conversation = conversationRef.current
+            const currentPrivateMessages = previousMessages.filter((message) =>
+              conversation.isPrivateChat
+              && message.isPrivate
+              && (
+                (message.nickname === currentNickname && message.recipientNickname === conversation.privateRecipient)
+                || (message.nickname === conversation.privateRecipient && message.recipientNickname === currentNickname)
+              ),
+            )
+            return [...publicHistory, ...currentPrivateMessages]
+          })
           setKnownMembers((prev) =>
             history.reduce((members, message) => rememberMember(members, message.nickname, message.timestamp), prev),
           )
@@ -377,7 +546,7 @@ function ChatApp() {
         activeConnection.stop()
       }
     }
-  }, [showChat, currentNickname, roomId, signalRUrl])
+  }, [showChat, currentNickname, roomId, savedNickname, signalRUrl])
 
   useEffect(() => {
     if (!shouldStickToBottomRef.current) return
@@ -567,11 +736,16 @@ function ChatApp() {
       : text
 
     try {
-      await connection.invoke('SendMessage', roomId, currentNickname, content)
+      if (isPrivateChat) {
+        await connection.invoke('SendPrivateMessage', roomId, currentNickname, privateRecipient, content)
+      } else {
+        await connection.invoke('SendMessage', roomId, currentNickname, content)
+      }
       setMessageInput('')
       setShowEmojiPicker(false)
     } catch (error) {
       console.error('Error sending message:', error)
+      setRoomActionError('Không thể gửi tin nhắn. Vui lòng thử lại.')
     }
   }
 
@@ -598,11 +772,53 @@ function ChatApp() {
     setMessages([])
     setOnlineUsers([])
     setKnownMembers([])
+    setIsPrivateChat(false)
+    setPrivateRecipient('')
+    privateHistoryRequestRef.current += 1
     setIsEditingRoomName(false)
     setRoomInfo(room)
     setConnection(null)
     setIsConnected(false)
     setShowMobileSidebar(false)
+    setRoomActionError('')
+  }
+
+  const openPrivateChat = async (recipient) => {
+    if (!connection || recipient === currentNickname) return
+
+    const requestId = ++privateHistoryRequestRef.current
+    setPrivateChats(savePrivateChat(currentNickname, roomId, recipient))
+    setRoomForm(null)
+    setIsEditingRoomName(false)
+    setIsPrivateChat(true)
+    setPrivateRecipient(recipient)
+    setMessages((current) => current.filter((message) => !message.isPrivate || (
+      !(
+        (message.nickname === currentNickname && message.recipientNickname === recipient)
+        || (message.nickname === recipient && message.recipientNickname === currentNickname)
+      )
+    )))
+    setRoomActionError('')
+
+    try {
+      const history = await connection.invoke('GetPrivateMessageHistory', roomId, currentNickname, recipient)
+      if (privateHistoryRequestRef.current !== requestId) return
+
+      setMessages((current) => mergeMessagesById(current, mapPrivateMessages(history, currentNickname)))
+    } catch (error) {
+      console.error('Error loading private conversation:', error)
+      if (privateHistoryRequestRef.current === requestId) {
+        setRoomActionError(error.message?.includes('Method does not exist')
+          ? 'Máy chủ chưa cập nhật API chat riêng. Hãy triển khai phiên bản server mới.'
+          : 'Không thể tải cuộc trò chuyện riêng. Vui lòng thử lại.')
+      }
+    }
+  }
+
+  const closePrivateChat = () => {
+    privateHistoryRequestRef.current += 1
+    setIsPrivateChat(false)
+    setPrivateRecipient('')
     setRoomActionError('')
   }
 
@@ -632,6 +848,7 @@ function ChatApp() {
     }
 
     setCurrentNickname(nextNickname)
+    setRooms(readSavedRooms(nextNickname, nextNickname === savedNickname))
     setRoomCodeInput('')
     setRoomForm(null)
     setRoomActionError('')
@@ -639,9 +856,90 @@ function ChatApp() {
     setShowChat(true)
   }
 
+  const handleCreateRoom = async (event) => {
+    event.preventDefault()
+    const displayName = roomNameInput.trim()
+    if (!displayName || displayName.length > 50) {
+      setRoomActionError('Tên phòng phải có từ 1 đến 50 ký tự.')
+      return
+    }
+
+    if (!connection || !isConnected) {
+      setRoomActionError('Đang kết nối lại. Vui lòng thử tạo phòng sau.')
+      return
+    }
+
+    const newRoomId = generateRoomId()
+    pendingCreateRoomIdRef.current = newRoomId
+    try {
+      await connection.invoke(
+        'CreateRoom',
+        newRoomId,
+        displayName,
+        currentNickname,
+      )
+      setRoomNameInput('')
+      setRoomForm(null)
+      setRoomActionError('')
+      switchRoom({ roomId: newRoomId, displayName })
+    } catch (error) {
+      console.error('Error creating room:', error)
+      setRoomActionError(error.message?.includes('Method does not exist')
+        ? 'Máy chủ chưa hỗ trợ tạo phòng. Hãy cập nhật API chat.'
+        : 'Không thể tạo phòng. Vui lòng thử lại.')
+    } finally {
+      if (pendingCreateRoomIdRef.current === newRoomId) {
+        pendingCreateRoomIdRef.current = null
+      }
+    }
+  }
+
+  const handleStartPrivateChat = async (event) => {
+    event.preventDefault()
+    if (!privateChatRecipientInput) {
+      setRoomActionError('Vui lòng chọn thành viên để bắt đầu chat 1-1.')
+      return
+    }
+    if (!connection || !isConnected) {
+      setRoomActionError('Đang kết nối lại. Vui lòng thử bắt đầu chat sau.')
+      return
+    }
+
+    await openPrivateChat(privateChatRecipientInput)
+    setRoomForm(null)
+    setPrivateChatRecipientInput('')
+  }
+
   const handleCopyRoomCode = async (room) => {
     try {
-      await window.navigator.clipboard.writeText(room.roomId)
+      let copied = false
+      let clipboardError = null
+      if (typeof window.navigator.clipboard?.writeText === 'function') {
+        try {
+          await window.navigator.clipboard.writeText(room.roomId)
+          copied = true
+        } catch (error) {
+          clipboardError = error
+        }
+      }
+
+      if (!copied) {
+        const temporaryInput = document.createElement('textarea')
+        temporaryInput.value = room.roomId
+        temporaryInput.setAttribute('readonly', '')
+        temporaryInput.style.position = 'fixed'
+        temporaryInput.style.opacity = '0'
+        document.body.appendChild(temporaryInput)
+        let copied = false
+        try {
+          temporaryInput.select()
+          copied = document.execCommand('copy')
+        } finally {
+          document.body.removeChild(temporaryInput)
+        }
+        if (!copied) throw clipboardError || new Error('Clipboard copy was rejected.')
+      }
+      setCopyFeedback(room.roomId)
       setRoomActionError('')
     } catch (error) {
       console.error('Error copying room code:', error)
@@ -678,6 +976,7 @@ function ChatApp() {
     }
 
     setCurrentNickname(nextNickname)
+    setRooms(readSavedRooms(nextNickname, nextNickname === savedNickname))
     setRoomInfo(DEFAULT_ROOM)
     setRoomActionError('')
     setShowChat(true)
@@ -728,6 +1027,7 @@ function ChatApp() {
     }
 
     window.localStorage.setItem('chat.nickname', nextNickname)
+    setRooms(readSavedRooms(nextNickname, nextNickname === savedNickname))
     setKnownMembers((prev) => rememberMember(prev, nextNickname))
     setCurrentNickname(nextNickname)
     setShowQuickSettings(false)
@@ -765,6 +1065,41 @@ function ChatApp() {
     setRoomCodeInput('')
     setRoomActionError('')
     setRoomInfo(DEFAULT_ROOM)
+    setIsPrivateChat(false)
+    setPrivateRecipient('')
+  }
+
+  const handleLeaveRoom = async () => {
+    if (!connection) {
+      setRoomActionError('Chưa kết nối với phòng. Vui lòng thử lại sau.')
+      return
+    }
+
+    try {
+      await connection.invoke('LeaveRoom', roomId, currentNickname)
+    } catch (error) {
+      console.error('Error leaving chat room:', error)
+      setRoomActionError('Không thể rời phòng. Vui lòng thử lại.')
+      return
+    }
+
+    setConnection(null)
+    setIsConnected(false)
+    setMessages([])
+    setOnlineUsers([])
+    setKnownMembers([])
+    setIsPrivateChat(false)
+    setPrivateRecipient('')
+    setRoomForm(null)
+    setShowRoomMenu(false)
+    setRoomActionError('')
+
+    if (roomId === DEFAULT_ROOM.roomId) {
+      setShowChat(false)
+      return
+    }
+
+    setRoomInfo(rooms.find((room) => room.roomId === DEFAULT_ROOM.roomId) || DEFAULT_ROOM)
   }
 
   const appendToMessage = (value) => {
@@ -842,6 +1177,9 @@ function ChatApp() {
                 aria-label="Vào phòng chung"
                 title="Vào phòng chung"
               />
+            </div>
+            <div className="nickname-preview" aria-live="polite">
+              Tên hiển thị của bạn: <strong>{nickname.trim() || 'Chưa nhập nickname'}</strong>
             </div>
           </div>
           {roomActionError && <div className="room-action-error" role="alert">{roomActionError}</div>}
@@ -930,7 +1268,7 @@ function ChatApp() {
             <div className="sidebar-block-title">
               <span className="members-title-icon">▣</span>
               <span>Phòng chat</span>
-              <span className="sidebar-pill">{rooms.length}</span>
+              <span className="sidebar-pill">{rooms.length + privateChats.length}</span>
             </div>
             <div className="room-actions">
               <button
@@ -939,8 +1277,29 @@ function ChatApp() {
                   setRoomForm((form) => form === 'join' ? null : 'join')
                   setRoomActionError('')
                 }}
+                aria-pressed={roomForm === 'join'}
               >
-                Vào hoặc tạo bằng mã
+                Vào phòng
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setRoomForm((form) => form === 'create' ? null : 'create')
+                  setRoomActionError('')
+                }}
+                aria-pressed={roomForm === 'create'}
+              >
+                Tạo phòng (MÃ)
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setRoomForm((form) => form === 'private' ? null : 'private')
+                  setRoomActionError('')
+                }}
+                aria-pressed={roomForm === 'private'}
+              >
+                Chat 1-1
               </button>
             </div>
 
@@ -948,18 +1307,75 @@ function ChatApp() {
               <form className="room-create-form" onSubmit={handleJoinRoom}>
                 <input
                   aria-label="Mã phòng"
-                  placeholder="Nhập mã để vào hoặc tạo phòng"
+                  placeholder="Nhập mã phòng"
                   maxLength={100}
                   value={roomCodeInput}
                   onChange={(event) => setRoomCodeInput(event.target.value)}
                 />
-                <button type="submit" disabled={!roomCodeInput.trim()}>Vào hoặc tạo phòng</button>
+                <button type="submit" disabled={!roomCodeInput.trim()}>Vào phòng</button>
+              </form>
+            )}
+
+            {roomForm === 'create' && (
+              <form className="room-create-form" onSubmit={handleCreateRoom}>
+                <input
+                  aria-label="Tên phòng mới"
+                  placeholder="Tên phòng mới"
+                  maxLength={50}
+                  value={roomNameInput}
+                  onChange={(event) => setRoomNameInput(event.target.value)}
+                />
+                <button type="submit" disabled={!roomNameInput.trim() || !connection || !isConnected}>
+                  Tạo phòng và vào
+                </button>
+              </form>
+            )}
+
+            {roomForm === 'private' && (
+              <form className="room-create-form" onSubmit={handleStartPrivateChat}>
+                <select
+                  aria-label="Chọn thành viên chat 1-1"
+                  value={privateChatRecipientInput}
+                  onChange={(event) => setPrivateChatRecipientInput(event.target.value)}
+                >
+                  <option value="">Chọn thành viên trong phòng</option>
+                  {knownMembers
+                    .filter((member) => member.nickname !== currentNickname)
+                    .map((member) => (
+                      <option key={member.nickname} value={member.nickname}>{member.nickname}</option>
+                    ))}
+                </select>
+                <button
+                  type="submit"
+                  disabled={!privateChatRecipientInput || !connection || !isConnected}
+                >
+                  Bắt đầu chat 1-1
+                </button>
               </form>
             )}
 
             {roomActionError && <div className="room-action-error" role="alert">{roomActionError}</div>}
 
             <div className="room-entry-list" aria-label="Các phòng đã tham gia trên thiết bị">
+              {privateChats.map((recipient) => (
+                <div
+                  className={`room-entry ${isPrivateChat && privateRecipient === recipient ? 'active' : ''}`}
+                  key={`private-${recipient}`}
+                >
+                  <button
+                    className="room-entry-select"
+                    type="button"
+                    onClick={() => openPrivateChat(recipient)}
+                    aria-current={isPrivateChat && privateRecipient === recipient ? 'page' : undefined}
+                  >
+                    <span aria-hidden="true">👤</span>
+                    <span className="room-entry-name">
+                      <strong>{recipient}</strong>
+                      <small>Chat 1-1</small>
+                    </span>
+                  </button>
+                </div>
+              ))}
               {rooms.map((room) => (
                 <div className={`room-entry ${room.roomId === roomId ? 'active' : ''}`} key={room.roomId}>
                   <button
@@ -978,10 +1394,14 @@ function ChatApp() {
                     className="room-copy-button"
                     type="button"
                     onClick={() => handleCopyRoomCode(room)}
-                    title="Sao chép mã mời"
-                    aria-label={`Sao chép mã phòng ${room.displayName}`}
+                    title={copyFeedback === room.roomId ? 'Đã sao chép mã phòng' : 'Sao chép mã mời'}
+                    aria-label={
+                      copyFeedback === room.roomId
+                        ? `Đã sao chép mã phòng ${room.displayName}`
+                        : `Sao chép mã phòng ${room.displayName}`
+                    }
                   >
-                    ⧉
+                    {copyFeedback === room.roomId ? '✓' : '⧉'}
                   </button>
                 </div>
               ))}
@@ -1055,6 +1475,18 @@ function ChatApp() {
                           {isOnline ? 'Đang hoạt động' : formatLastSeen(member.lastSeen)}
                         </div>
                       </div>
+                      {!isMine && (
+                        <button
+                          className="member-chat-button"
+                          type="button"
+                          disabled={!connection}
+                          onClick={() => openPrivateChat(member.nickname)}
+                          aria-label={`Chat riêng với ${member.nickname}`}
+                          title={`Chat riêng với ${member.nickname}`}
+                        >
+                          Chat
+                        </button>
+                      )}
                     </div>
                   )
                 })
@@ -1102,10 +1534,10 @@ function ChatApp() {
                       autoFocus
                     />
                   ) : (
-                    <h2>{roomLabel}</h2>
+                    <h2>{isPrivateChat ? privateRecipient : roomLabel}</h2>
                   )}
 
-                  {!isEditingRoomName && (
+                  {!isPrivateChat && !isEditingRoomName && (
                     <button
                       className="icon-button"
                       type="button"
@@ -1119,7 +1551,7 @@ function ChatApp() {
                     </button>
                   )}
 
-                  {isEditingRoomName && (
+                  {!isPrivateChat && isEditingRoomName && (
                     <button
                       className="icon-button"
                       type="button"
@@ -1135,30 +1567,44 @@ function ChatApp() {
                   )}
                 </div>
                 <p className="room-subtitle">
-                  <span className="room-online-dot" />
-                  {onlineMemberCount}/{knownMembers.length} online
-                  <span className="subtitle-divider">·</span>
-                  Phòng chat
+                  {isPrivateChat ? (
+                    <>Cuộc trò chuyện riêng 1-1 trong {roomLabel}</>
+                  ) : (
+                    <>
+                      <span className="room-online-dot" />
+                      {onlineMemberCount}/{knownMembers.length} online
+                      <span className="subtitle-divider">·</span>
+                      Phòng chat
+                    </>
+                  )}
                 </p>
               </div>
             </div>
 
             <div className="chat-header-right">
-              <span className="room-chip">
-                <span className="room-online-dot" />
-                {onlineMemberCount} online
-              </span>
-              <button
-                className="icon-button room-menu-button"
-                type="button"
-                aria-label="Cài đặt phòng chat"
-                aria-expanded={showRoomMenu}
-                onClick={() => setShowRoomMenu((value) => !value)}
-              >
-                •••
-              </button>
+              {isPrivateChat ? (
+                <button className="conversation-back-button" type="button" onClick={closePrivateChat}>
+                  ← Phòng chat
+                </button>
+              ) : (
+                <>
+                  <span className="room-chip">
+                    <span className="room-online-dot" />
+                    {onlineMemberCount} online
+                  </span>
+                  <button
+                    className="icon-button room-menu-button"
+                    type="button"
+                    aria-label="Cài đặt phòng chat"
+                    aria-expanded={showRoomMenu}
+                    onClick={() => setShowRoomMenu((value) => !value)}
+                  >
+                    •••
+                  </button>
+                </>
+              )}
 
-              {showRoomMenu && (
+              {showRoomMenu && !isPrivateChat && (
                 <div className="room-menu-panel">
                   <strong>Cài đặt phòng</strong>
                   <span>{roomLabel}</span>
@@ -1182,6 +1628,13 @@ function ChatApp() {
                   >
                     ♙ Xem thành viên
                   </button>
+                  <button
+                    className="leave-room-action"
+                    type="button"
+                    onClick={handleLeaveRoom}
+                  >
+                    ↪ Rời phòng
+                  </button>
                 </div>
               )}
             </div>
@@ -1196,15 +1649,19 @@ function ChatApp() {
             tabIndex={0}
             onScroll={handleMessagesScroll}
           >
-            {messages.length === 0 && (
+            {visibleMessages.length === 0 && (
               <div className="chat-welcome">
                 <div className="welcome-sparkle">✦</div>
-                <strong>Bắt đầu cuộc trò chuyện</strong>
-                <span>Gửi lời chào đầu tiên đến mọi người trong phòng nhé.</span>
+                <strong>{isPrivateChat ? `Bắt đầu chat riêng với ${privateRecipient}` : 'Bắt đầu cuộc trò chuyện'}</strong>
+                <span>
+                  {isPrivateChat
+                    ? 'Tin nhắn này chỉ hiển thị với bạn và người nhận.'
+                    : 'Gửi lời chào đầu tiên đến mọi người trong phòng nhé.'}
+                </span>
               </div>
             )}
 
-            {messages.map((msg, index) =>
+            {visibleMessages.map((msg, index) =>
               msg.type === 'system' ? (
                 <div key={`${msg.nickname}-${index}`} className="system-message">
                   <span className="system-message-icon" aria-hidden="true">✦</span>
@@ -1353,7 +1810,7 @@ function ChatApp() {
               <input
                 type="text"
                 className="message-input"
-                placeholder="Nhập tin nhắn..."
+                placeholder={isPrivateChat ? `Nhắn riêng cho ${privateRecipient}...` : 'Nhập tin nhắn...'}
                 value={messageInput}
                 onChange={(event) => setMessageInput(event.target.value)}
                 onFocus={() => setShowEmojiPicker(false)}

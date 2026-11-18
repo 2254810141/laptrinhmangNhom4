@@ -6,6 +6,7 @@ namespace RealtimeChatAPI.Services
     public interface IChatService
     {
         Task<List<ChatMessage>> GetMessageHistoryAsync(string roomId, int limit = 50);
+        Task<List<ChatMessage>> GetPrivateMessageHistoryAsync(string roomId, string nickname, string otherNickname, int limit = 100);
         Task SaveMessageAsync(ChatMessage message);
         Task<ChatRoom?> GetRoomAsync(string roomId);
         Task<ChatRoom> GetOrCreateRoomAsync(string roomId);
@@ -36,6 +37,15 @@ namespace RealtimeChatAPI.Services
                 var indexKeysDefinition = Builders<ChatMessage>.IndexKeys.Ascending(m => m.RoomId);
                 _messagesCollection.Indexes.CreateOne(new CreateIndexModel<ChatMessage>(indexKeysDefinition));
 
+                var privateMessageIndex = Builders<ChatMessage>.IndexKeys
+                    .Ascending(message => message.RoomId)
+                    .Ascending(message => message.IsPrivate)
+                    .Ascending(message => message.Nickname)
+                    .Ascending(message => message.RecipientNickname)
+                    .Descending(message => message.Timestamp)
+                    .Descending(message => message.Id);
+                _messagesCollection.Indexes.CreateOne(new CreateIndexModel<ChatMessage>(privateMessageIndex));
+
                 var roomIndexKeys = Builders<ChatRoom>.IndexKeys.Ascending(r => r.RoomId);
                 var roomIndexOptions = new CreateIndexOptions { Unique = true };
                 _roomsCollection.Indexes.CreateOne(new CreateIndexModel<ChatRoom>(roomIndexKeys, roomIndexOptions));
@@ -54,13 +64,41 @@ namespace RealtimeChatAPI.Services
 
         public async Task<List<ChatMessage>> GetMessageHistoryAsync(string roomId, int limit = 50)
         {
+            var filter = Builders<ChatMessage>.Filter.Eq(message => message.RoomId, roomId)
+                & Builders<ChatMessage>.Filter.Ne(message => message.IsPrivate, true);
             var messages = await _messagesCollection
-                .Find(m => m.RoomId == roomId)
+                .Find(filter)
                 .SortByDescending(m => m.Timestamp)
                 .Limit(limit)
                 .ToListAsync();
 
             messages.Reverse(); // Return oldest first
+            return messages;
+        }
+
+        public async Task<List<ChatMessage>> GetPrivateMessageHistoryAsync(
+            string roomId,
+            string nickname,
+            string otherNickname,
+            int limit = 100)
+        {
+            var filter = Builders<ChatMessage>.Filter.Eq(message => message.RoomId, roomId)
+                & Builders<ChatMessage>.Filter.Eq(message => message.IsPrivate, true)
+                & (Builders<ChatMessage>.Filter.And(
+                    Builders<ChatMessage>.Filter.Eq(message => message.Nickname, nickname),
+                    Builders<ChatMessage>.Filter.Eq(message => message.RecipientNickname, otherNickname))
+                    | Builders<ChatMessage>.Filter.And(
+                        Builders<ChatMessage>.Filter.Eq(message => message.Nickname, otherNickname),
+                        Builders<ChatMessage>.Filter.Eq(message => message.RecipientNickname, nickname)));
+
+            var messages = await _messagesCollection
+                .Find(filter)
+                .SortByDescending(message => message.Timestamp)
+                .ThenByDescending(message => message.Id)
+                .Limit(limit)
+                .ToListAsync();
+
+            messages.Reverse();
             return messages;
         }
 
