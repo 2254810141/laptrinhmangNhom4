@@ -105,13 +105,16 @@ namespace RealtimeChatAPI.Hubs
 
             var room = await _chatService.GetOrCreateRoomAsync(roomId);
             await _chatService.UpsertRoomMemberAsync(roomId, nickname);
+            await _chatService.AddRoomMemberAsync(roomId, nickname);
             var history = await _chatService.GetMessageHistoryAsync(roomId);
             var members = await _chatService.GetRoomMembersAsync(roomId);
             await Clients.Caller.SendAsync("RoomInfoLoaded", new
             {
                 roomId = room.RoomId,
                 displayName = room.DisplayName,
-                updatedAt = room.UpdatedAt
+                updatedAt = room.UpdatedAt,
+                roomType = room.RoomType,
+                members = room.Members
             });
             await Clients.Caller.SendAsync("LoadHistory", history);
             await Clients.Caller.SendAsync("LoadMembers", members.Select(member => new
@@ -120,11 +123,124 @@ namespace RealtimeChatAPI.Hubs
                 lastSeen = member.LastSeen,
                 avatar = member.Avatar
             }));
+            var rooms = await _chatService.GetRoomsForMemberAsync(nickname);
+            await Clients.Caller.SendAsync("RoomsLoaded", rooms.Select(chatRoom => new
+            {
+                roomId = chatRoom.RoomId,
+                displayName = chatRoom.DisplayName,
+                roomType = chatRoom.RoomType,
+                members = chatRoom.Members,
+                updatedAt = chatRoom.UpdatedAt
+            }));
 
             await Clients.Group(roomId).SendAsync("UpdateOnlineUsers", GetOnlineUsers(roomId));
             await Clients.Group(roomId).SendAsync("NotifyUserJoined", nickname);
 
             Console.WriteLine($"User {nickname} joined room {roomId}");
+        }
+
+        public async Task JoinRoomByName(string displayName, string passcode)
+        {
+            var nickname = string.Empty;
+            lock (_lock)
+            {
+                foreach (var users in _onlineUsers.Values)
+                {
+                    if (users.TryGetValue(Context.ConnectionId, out var joinedNickname))
+                    {
+                        nickname = joinedNickname;
+                        break;
+                    }
+                }
+            }
+
+            if (string.IsNullOrWhiteSpace(nickname))
+            {
+                throw new HubException("Bạn cần đăng nhập trước khi tham gia phòng.");
+            }
+
+            var room = await _chatService.JoinRoomByNameAsync(displayName, passcode, nickname);
+            if (room == null)
+            {
+                throw new HubException("Tên phòng hoặc mã bảo mật không đúng.");
+            }
+
+            await Clients.Caller.SendAsync("RoomCreated", new
+            {
+                roomId = room.RoomId,
+                displayName = room.DisplayName,
+                roomType = room.RoomType,
+                members = room.Members,
+                updatedAt = room.UpdatedAt
+            });
+        }
+
+        public async Task CreateRoom(string displayName, string roomType, string? targetNickname, string? passcode = null)
+        {
+            var creatorNickname = string.Empty;
+            lock (_lock)
+            {
+                foreach (var users in _onlineUsers.Values)
+                {
+                    if (users.TryGetValue(Context.ConnectionId, out var nickname))
+                    {
+                        creatorNickname = nickname;
+                        break;
+                    }
+                }
+            }
+
+            if (string.IsNullOrWhiteSpace(creatorNickname))
+            {
+                throw new HubException("Bạn cần tham gia chat trước khi tạo phòng.");
+            }
+
+            ChatRoom room;
+            if (roomType == "direct")
+            {
+                if (string.IsNullOrWhiteSpace(targetNickname)
+                    || targetNickname.Trim().Equals(creatorNickname, StringComparison.OrdinalIgnoreCase))
+                {
+                    throw new HubException("Vui lòng chọn một thành viên khác để chat 1-1.");
+                }
+
+                var existing = await _chatService.GetDirectRoomAsync(creatorNickname, targetNickname.Trim());
+                room = existing ?? await _chatService.CreateRoomAsync(
+                    targetNickname.Trim(),
+                    "direct",
+                    new[] { creatorNickname, targetNickname.Trim() });
+            }
+            else
+            {
+                if (string.IsNullOrWhiteSpace(passcode))
+                {
+                    throw new HubException("Phòng chat mới phải có mã bảo mật.");
+                }
+                room = await _chatService.CreateRoomAsync(
+                    displayName,
+                    "group",
+                    new[] { creatorNickname },
+                    passcode);
+            }
+
+            await Clients.Caller.SendAsync("RoomCreated", new
+            {
+                roomId = room.RoomId,
+                displayName = room.DisplayName,
+                roomType = room.RoomType,
+                members = room.Members,
+                updatedAt = room.UpdatedAt
+            });
+
+            var rooms = await _chatService.GetRoomsForMemberAsync(creatorNickname);
+            await Clients.Caller.SendAsync("RoomsLoaded", rooms.Select(chatRoom => new
+            {
+                roomId = chatRoom.RoomId,
+                displayName = chatRoom.DisplayName,
+                roomType = chatRoom.RoomType,
+                members = chatRoom.Members,
+                updatedAt = chatRoom.UpdatedAt
+            }));
         }
 
         public async Task UpdateRoomName(string roomId, string displayName)
@@ -353,6 +469,7 @@ namespace RealtimeChatAPI.Hubs
             if (removed)
             {
                 await _chatService.UpdateMemberLastSeenAsync(roomId, nickname);
+                await _chatService.RemoveRoomMemberAsync(roomId, nickname);
                 await Clients.Group(roomId).SendAsync("UpdateOnlineUsers", GetOnlineUsers(roomId));
                 await Clients.Group(roomId).SendAsync("MemberLastSeenUpdated", new
                 {
@@ -360,6 +477,16 @@ namespace RealtimeChatAPI.Hubs
                     lastSeen = DateTime.UtcNow
                 });
                 await Clients.Group(roomId).SendAsync("NotifyUserLeft", nickname);
+                var rooms = await _chatService.GetRoomsForMemberAsync(nickname);
+                await Clients.Caller.SendAsync("RoomsLoaded", rooms.Select(chatRoom => new
+                {
+                    roomId = chatRoom.RoomId,
+                    displayName = chatRoom.DisplayName,
+                    roomType = chatRoom.RoomType,
+                    members = chatRoom.Members,
+                    updatedAt = chatRoom.UpdatedAt
+                }));
+                await Clients.Caller.SendAsync("RoomLeft", new { roomId });
             }
         }
 

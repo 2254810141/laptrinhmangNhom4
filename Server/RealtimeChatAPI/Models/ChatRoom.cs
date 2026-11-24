@@ -16,6 +16,15 @@ namespace RealtimeChatAPI.Models
 
         [BsonElement("updatedAt")]
         public DateTime UpdatedAt { get; set; }
+
+        [BsonElement("roomType")]
+        public string RoomType { get; set; } = "group";
+
+        [BsonElement("members")]
+        public List<string> Members { get; set; } = new();
+
+        [BsonElement("passwordHash")]
+        public string PasswordHash { get; set; } = string.Empty;
     }
 
 }

@@ -102,8 +102,15 @@ function ChatApp() {
   const [onlineUsers, setOnlineUsers] = useState([])
   const [knownMembers, setKnownMembers] = useState([])
   const [memberFilter, setMemberFilter] = useState('all')
-  const [roomInfo, setRoomInfo] = useState({ roomId: 'default-room', displayName: 'Hội ae rok' })
+  const [roomInfo, setRoomInfo] = useState({ roomId: 'default-room', displayName: 'Hội ae rok', roomType: 'group', members: [] })
   const [roomNameDraft, setRoomNameDraft] = useState('Hội ae rok')
+  const [chatRooms, setChatRooms] = useState([])
+  const [showCreateRoom, setShowCreateRoom] = useState(false)
+  const [showJoinRoom, setShowJoinRoom] = useState(false)
+  const [newRoomName, setNewRoomName] = useState('')
+  const [newRoomPassword, setNewRoomPassword] = useState('')
+  const [joinRoomName, setJoinRoomName] = useState('')
+  const [joinRoomPassword, setJoinRoomPassword] = useState('')
   const [onlineCount, setOnlineCount] = useState(0)
   const [isEditingRoomName, setIsEditingRoomName] = useState(false)
   const [isSavingRoomName, setIsSavingRoomName] = useState(false)
@@ -383,6 +390,28 @@ function ChatApp() {
         newConnection.on('RoomInfoLoaded', (room) => {
           setRoomInfo(room)
           setRoomNameDraft(room.displayName)
+        })
+
+        newConnection.on('RoomsLoaded', (rooms) => {
+          setChatRooms(rooms)
+        })
+
+        newConnection.on('RoomLeft', ({ roomId: leftRoomId }) => {
+          setChatRooms((rooms) => rooms.filter((room) => room.roomId !== leftRoomId))
+        })
+
+        newConnection.on('RoomCreated', (room) => {
+          setChatRooms((rooms) => {
+            const otherRooms = rooms.filter((item) => item.roomId !== room.roomId)
+            return [room, ...otherRooms]
+          })
+          setMessages([])
+          setKnownMembers([])
+          setOnlineUsers([])
+          setRoomInfo(room)
+          setRoomNameDraft(room.displayName)
+          setShowCreateRoom(false)
+          setShowRoomMenu(false)
         })
 
         newConnection.on('RoomNameUpdated', (room) => {
@@ -845,6 +874,97 @@ function ChatApp() {
     }
   }
 
+  const handleSwitchRoom = async (nextRoom) => {
+    if (!nextRoom || nextRoom.roomId === roomId) {
+      setShowCreateRoom(false)
+      setShowRoomMenu(false)
+      return
+    }
+
+    if (voiceJoinedRef.current) {
+      try {
+        await connection?.invoke('LeaveVoiceRoom', roomId)
+      } catch (error) {
+        console.error('Error leaving voice chat before switching room:', error)
+      }
+      cleanupVoiceLocally()
+    }
+
+    setMessages([])
+    setKnownMembers([])
+    setOnlineUsers([])
+    setRoomInfo(nextRoom)
+    setRoomNameDraft(nextRoom.displayName)
+    setShowCreateRoom(false)
+    setShowRoomMenu(false)
+  }
+
+  const handleCreateGroupRoom = async () => {
+    if (!connection || !isConnected) return
+    const name = newRoomName.trim()
+    const passcode = newRoomPassword.trim()
+    if (!name) {
+      alert('Vui lòng nhập tên phòng.')
+      return
+    }
+    if (!passcode) {
+      alert('Vui lòng nhập mã bảo mật.')
+      return
+    }
+    try {
+      await connection.invoke('CreateRoom', name, 'group', null, passcode)
+      setNewRoomName('')
+      setNewRoomPassword('')
+    } catch (error) {
+      console.error('Error creating room:', error)
+      alert(error instanceof Error ? error.message : 'Không thể tạo phòng chat mới.')
+    }
+  }
+
+  const handleJoinRoomByName = async () => {
+    if (!connection || !isConnected) return
+    if (!joinRoomName.trim() || !joinRoomPassword.trim()) {
+      alert('Vui lòng nhập tên phòng và mã bảo mật.')
+      return
+    }
+    try {
+      await connection.invoke('JoinRoomByName', joinRoomName.trim(), joinRoomPassword.trim())
+      setJoinRoomName('')
+      setJoinRoomPassword('')
+      setShowJoinRoom(false)
+    } catch (error) {
+      console.error('Error joining room:', error)
+      alert(error instanceof Error ? error.message : 'Tên phòng hoặc mã bảo mật không đúng.')
+    }
+  }
+
+  const handleLeaveCurrentRoom = async () => {
+    if (!connection || !isConnected) return
+    try {
+      if (voiceJoinedRef.current) {
+        await connection.invoke('LeaveVoiceRoom', roomId)
+      }
+      await connection.invoke('LeaveRoom', roomId, currentNickname)
+      cleanupVoiceLocally()
+      setRoomInfo({ roomId: 'default-room', displayName: 'Hội ae rok', roomType: 'group', members: [] })
+      setRoomNameDraft('Hội ae rok')
+      setShowRoomMenu(false)
+    } catch (error) {
+      console.error('Error leaving room:', error)
+      alert('Không thể rời phòng.')
+    }
+  }
+
+  const handleCreateDirectRoom = async (targetNickname) => {
+    if (!connection || !isConnected || !targetNickname) return
+    try {
+      await connection.invoke('CreateRoom', targetNickname, 'direct', targetNickname)
+    } catch (error) {
+      console.error('Error creating direct room:', error)
+      alert(error instanceof Error ? error.message : 'Không thể tạo phòng chat 1-1.')
+    }
+  }
+
   const handleKeyPress = (event) => {
     if (event.key === 'Enter' && !event.shiftKey) {
       event.preventDefault()
@@ -1082,6 +1202,41 @@ function ChatApp() {
             onChange={handleAvatarChange}
           />
 
+          <div className="room-list-block">
+            <div className="sidebar-block-title">
+              <span className="members-title-icon">◫</span>
+              <span>Phòng chat</span>
+              <span className="sidebar-pill">{chatRooms.length}</span>
+            </div>
+            <button
+              className="create-room-button"
+              type="button"
+              onClick={() => setShowCreateRoom(true)}
+            >
+              + Tạo phòng mới
+            </button>
+            <button
+              className="create-room-button"
+              type="button"
+              onClick={() => setShowJoinRoom(true)}
+            >
+              🔐 Tham gia bằng mã
+            </button>
+            <div className="room-list">
+              {chatRooms.map((room) => (
+                <button
+                  key={room.roomId}
+                  className={`room-list-item ${room.roomId === roomId ? 'active' : ''}`}
+                  type="button"
+                  onClick={() => handleSwitchRoom(room)}
+                >
+                  <span className="room-list-icon">{room.roomType === 'direct' ? '◎' : '#'}</span>
+                  <span className="room-list-name">{room.displayName}</span>
+                </button>
+              ))}
+            </div>
+          </div>
+
           <div className="sidebar-block">
             <div className="sidebar-block-title">
               <span className="members-title-icon">◉</span>
@@ -1151,6 +1306,17 @@ function ChatApp() {
                           {isOnline ? 'Đang hoạt động' : formatLastSeen(member.lastSeen)}
                         </div>
                       </div>
+                      {!isMine && (
+                        <button
+                          className="direct-chat-button"
+                          type="button"
+                          onClick={() => handleCreateDirectRoom(member.nickname)}
+                          title={`Chat 1-1 với ${member.nickname}`}
+                          aria-label={`Chat 1-1 với ${member.nickname}`}
+                        >
+                          💬
+                        </button>
+                      )}
                     </div>
                   )
                 })
@@ -1300,10 +1466,121 @@ function ChatApp() {
                   >
                     ♙ Xem thành viên
                   </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setShowCreateRoom(true)
+                      setShowRoomMenu(false)
+                    }}
+                  >
+                    + Tạo phòng mới
+                  </button>
+                  <button type="button" onClick={handleLeaveCurrentRoom}>
+                    ↪ Rời phòng
+                  </button>
                 </div>
               )}
             </div>
           </header>
+
+          {showCreateRoom && (
+            <div className="create-room-modal-backdrop" role="presentation">
+              <div className="create-room-modal" role="dialog" aria-modal="true" aria-labelledby="create-room-title">
+                <div className="create-room-modal-header">
+                  <div>
+                    <span>Tạo phòng chat</span>
+                    <h3 id="create-room-title">Phòng mới</h3>
+                  </div>
+                  <button
+                    type="button"
+                    className="icon-button"
+                    onClick={() => setShowCreateRoom(false)}
+                    aria-label="Đóng"
+                  >
+                    ×
+                  </button>
+                </div>
+                <label htmlFor="new-room-name">Tên phòng</label>
+                <input
+                  id="new-room-name"
+                  className="new-room-input"
+                  value={newRoomName}
+                  onChange={(event) => setNewRoomName(event.target.value)}
+                  onKeyDown={(event) => {
+                    if (event.key === 'Enter') handleCreateGroupRoom()
+                  }}
+                  placeholder="Ví dụ: Dự án, Bạn bè..."
+                  maxLength="50"
+                  autoFocus
+                />
+                <label htmlFor="new-room-password">Mã bảo mật</label>
+                <input
+                  id="new-room-password"
+                  className="new-room-input"
+                  type="password"
+                  value={newRoomPassword}
+                  onChange={(event) => setNewRoomPassword(event.target.value)}
+                  onKeyDown={(event) => {
+                    if (event.key === 'Enter') handleCreateGroupRoom()
+                  }}
+                  placeholder="Nhập mã bảo mật..."
+                  maxLength="64"
+                />
+                <div className="create-room-actions">
+                  <button type="button" onClick={() => setShowCreateRoom(false)}>Hủy</button>
+                  <button type="button" onClick={handleCreateGroupRoom}>Tạo phòng</button>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {showJoinRoom && (
+            <div className="create-room-modal-backdrop" role="presentation">
+              <div className="create-room-modal" role="dialog" aria-modal="true" aria-labelledby="join-room-title">
+                <div className="create-room-modal-header">
+                  <div>
+                    <span>Tham gia phòng</span>
+                    <h3 id="join-room-title">Nhập thông tin phòng</h3>
+                  </div>
+                  <button
+                    type="button"
+                    className="icon-button"
+                    onClick={() => setShowJoinRoom(false)}
+                    aria-label="Đóng"
+                  >
+                    ×
+                  </button>
+                </div>
+                <label htmlFor="join-room-name">Tên phòng</label>
+                <input
+                  id="join-room-name"
+                  className="new-room-input"
+                  value={joinRoomName}
+                  onChange={(event) => setJoinRoomName(event.target.value)}
+                  placeholder="Nhập tên phòng..."
+                  maxLength="50"
+                  autoFocus
+                />
+                <label htmlFor="join-room-password">Mã bảo mật</label>
+                <input
+                  id="join-room-password"
+                  className="new-room-input"
+                  type="password"
+                  value={joinRoomPassword}
+                  onChange={(event) => setJoinRoomPassword(event.target.value)}
+                  onKeyDown={(event) => {
+                    if (event.key === 'Enter') handleJoinRoomByName()
+                  }}
+                  placeholder="Nhập mã bảo mật..."
+                  maxLength="64"
+                />
+                <div className="create-room-actions">
+                  <button type="button" onClick={() => setShowJoinRoom(false)}>Hủy</button>
+                  <button type="button" onClick={handleJoinRoomByName}>Tham gia</button>
+                </div>
+              </div>
+            </div>
+          )}
 
           {voiceError && <div className="voice-error" role="alert">{voiceError}</div>}
           {voiceParticipants.map((participant) => (
